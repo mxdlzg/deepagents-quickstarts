@@ -11,7 +11,7 @@ from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 from deepagents import create_deep_agent
 
-from deep_research.research_agent.middlewares import CustomSummarizationMiddleware
+from research_agent.middlewares import CustomSummarizationMiddleware
 from research_agent.prompts import (
     RESEARCHER_INSTRUCTIONS,
     RESEARCH_WORKFLOW_INSTRUCTIONS,
