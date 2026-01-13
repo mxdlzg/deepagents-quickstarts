@@ -17,6 +17,7 @@ from research_agent.prompts import (
     SUBAGENT_DELEGATION_INSTRUCTIONS,
 )
 from research_agent.tools import tavily_search, think_tool
+from langchain.agents.middleware.summarization import SummarizationMiddleware
 
 # Load environment variables
 load_dotenv()
@@ -98,4 +99,11 @@ agent = create_deep_agent(
     tools=[tavily_search, think_tool],
     system_prompt=INSTRUCTIONS,
     subagents=[research_sub_agent],
+    middleware=[
+        SummarizationMiddleware(
+            model=model,
+            trigger=("tokens", 120000),
+            keep=("messages", 6)
+        )
+    ]
 )
