@@ -17,11 +17,17 @@ Install packages:
 uv sync
 ```
 
-Set your API keys in your environment:
+Set your API keys in your environment. Copy `.env.example` to `.env` and fill in your keys:
 
 ```bash
-export ANTHROPIC_API_KEY=your_anthropic_api_key_here  # Required for Claude model
-export GOOGLE_API_KEY=your_google_api_key_here        # Required for Gemini model ([get one here](https://ai.google.dev/gemini-api/docs))
+cp .env.example .env
+# Edit .env with your API keys
+```
+
+Or set them directly:
+
+```bash
+export OPENAI_API_KEY=sk-...                          # Required for OpenAI model
 export TAVILY_API_KEY=your_tavily_api_key_here        # Required for web search ([get one here](https://www.tavily.com/)) with a generous free tier
 export LANGSMITH_API_KEY=your_langsmith_api_key_here  # [LangSmith API key](https://smith.langchain.com/settings) (free to sign up)
 ```
@@ -71,23 +77,55 @@ This provides a user-friendly chat interface and visualization of files in state
 
 ### Custom Model
 
-By default, `deepagents` uses `"claude-sonnet-4-5-20250929"`. You can customize this by passing any [LangChain model object](https://python.langchain.com/docs/integrations/chat/). See the Deepagents package [README](https://github.com/langchain-ai/deepagents?tab=readme-ov-file#model) for more details.
+The agent is configured to use OpenAI-compatible models with environment variables. By default, it uses `gpt-4o`.
+
+**Configuration via Environment Variables:**
+
+```bash
+# Required
+OPENAI_API_KEY=sk-...
+
+# Optional (with defaults)
+OPENAI_MODEL=gpt-4o                    # Model name (default: gpt-4o)
+OPENAI_BASE_URL=https://api.openai.com/v1  # API endpoint (optional)
+OPENAI_TEMPERATURE=0.0                 # Sampling temperature (default: 0.0)
+OPENAI_TOP_P=1.0                       # Nucleus sampling (default: 1.0)
+OPENAI_MAX_TOKENS=2048                 # Max response tokens (optional)
+```
+
+See `.env.example` for more details and examples of using different providers (Azure, local endpoints, etc.).
+
+**Programmatic Configuration:**
+
+If you want to use a different model provider, you can modify `agent.py`:
 
 ```python
-from langchain.chat_models import init_chat_model
-from deepagents import create_deep_agent
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 
-# Using Claude
-model = init_chat_model(model="anthropic:claude-sonnet-4-5-20250929", temperature=0.0)
+# Using OpenAI
+model = ChatOpenAI(model="gpt-4o", temperature=0.0)
 
-# Using Gemini
-from langchain_google_genai import ChatGoogleGenerativeAI
-model = ChatGoogleGenerativeAI(model="gemini-3-pro-preview")
+# Using Claude (if you want to switch back)
+model = ChatAnthropic(model="claude-3-5-sonnet-20241022", temperature=0.0)
 
-agent = create_deep_agent(
-    model=model,
+# Using Azure OpenAI
+model = ChatOpenAI(
+    api_key="your-azure-api-key",
+    model="gpt-4",
+    base_url="https://<your-resource>.openai.azure.com/openai/deployments/<model-name>",
+    api_version="2024-02-15-preview",
 )
-```
+
+# Using local/self-hosted endpoints
+model = ChatOpenAI(
+    api_key="dummy-key",
+    model="local-model",
+    base_url="http://localhost:8000/v1",
+)
+
+from deepagents import create_deep_agent
+agent = create_deep_agent(model=model)
 
 ### Custom Instructions
 
