@@ -71,7 +71,7 @@ def create_model():
     base_url = os.getenv("OPENAI_BASE_URL", None)
     temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.0"))
     top_p = float(os.getenv("OPENAI_TOP_P", "1.0"))
-    max_tokens = os.getenv("OPENAI_MAX_TOKENS", None)
+    max_tokens = os.getenv("OPENAI_MAX_TOKENS", 120000)
 
     model_kwargs = {
         "api_key": api_key,
