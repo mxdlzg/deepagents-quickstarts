@@ -4,13 +4,24 @@ This module provides search and content processing utilities for the research ag
 using Tavily for URL discovery and fetching full webpage content.
 """
 
+import os
 import httpx
 from langchain_core.tools import InjectedToolArg, tool
 from markdownify import markdownify
-from tavily import TavilyClient
+from tavily.tavily import TavilyClient
 from typing_extensions import Annotated, Literal
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 tavily_client = TavilyClient()
+alb_mcp_client = MultiServerMCPClient({
+    "alb": {
+        "transport": "http",
+        "url": os.getenv("ALB_MCP_URL", "http://localhost:3000/api/mcp"),
+        "headers": {
+            "Authorization": f"Bearer {os.getenv('ALB_MCP_TOKEN', 'alb_sk-xxxx')}",
+        }
+    }
+})
 
 
 def fetch_webpage_content(url: str, timeout: float = 10.0) -> str:

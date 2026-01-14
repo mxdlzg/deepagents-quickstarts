@@ -17,7 +17,7 @@ from research_agent.prompts import (
     RESEARCH_WORKFLOW_INSTRUCTIONS,
     SUBAGENT_DELEGATION_INSTRUCTIONS,
 )
-from research_agent.tools import tavily_search, think_tool
+from research_agent.tools import tavily_search, think_tool, alb_mcp_client
 from langchain.agents.middleware.summarization import SummarizationMiddleware
 
 # Load environment variables
@@ -90,21 +90,32 @@ def create_model():
 
     return ChatOpenAI(**model_kwargs)
 
+async def create_agent_with_mcp():
+    """Create agent with MCP tools loaded asynchronously."""
+    model = create_model()
+    
+    # Load MCP tools asynchronously
+    mcp_tools = await alb_mcp_client.get_tools()
+    
+    # Combine base tools with MCP tools
+    all_tools = [tavily_search, think_tool] + mcp_tools
+    
+    # Create the agent
+    agent = create_deep_agent(
+        model=model,
+        tools=all_tools,
+        system_prompt=INSTRUCTIONS,
+        subagents=[research_sub_agent],
+        middleware=[
+            CustomSummarizationMiddleware(
+                model=model,
+                trigger=("tokens", 120000),
+                keep=("messages", 6)
+            )
+        ]
+    )
+    return agent
 
-# Create the model
-model = create_model()
-
-# Create the agent
-agent = create_deep_agent(
-    model=model,
-    tools=[tavily_search, think_tool],
-    system_prompt=INSTRUCTIONS,
-    subagents=[research_sub_agent],
-    middleware=[
-        CustomSummarizationMiddleware(
-            model=model,
-            trigger=("tokens", 120000),
-            keep=("messages", 6)
-        )
-    ]
-)
+# Create the agent at module level by running the async function
+import asyncio
+agent = asyncio.run(create_agent_with_mcp())
