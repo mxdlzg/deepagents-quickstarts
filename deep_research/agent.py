@@ -9,7 +9,8 @@ from datetime import datetime
 
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
-from deepagents import create_deep_agent
+from deepagents import SubAgent, create_deep_agent, CompiledSubAgent
+from langchain.agents import create_agent
 
 from research_agent.middlewares import CustomSummarizationMiddleware,CustomMemoryMiddleware
 from research_agent.prompts import (
@@ -42,15 +43,6 @@ INSTRUCTIONS = (
         max_researcher_iterations=max_researcher_iterations,
     )
 )
-
-# Create research sub-agent
-research_sub_agent = {
-    "name": "research-agent",
-    "description": "Delegate research to the sub-agent researcher. Only give this researcher one topic at a time.",
-    "system_prompt": RESEARCHER_INSTRUCTIONS.format(date=current_date),
-    "tools": [tavily_search, think_tool],
-}
-
 
 def create_model():
     """Create OpenAI-compatible chat model from environment variables.
@@ -91,9 +83,34 @@ def create_model():
 
     return ChatOpenAI(**model_kwargs)
 
+my_model = create_model()
+
+# Create research sub-agent
+# research_sub_agent = {
+#     "name": "research-agent",
+#     "description": "Delegate research to the sub-agent researcher. Only give this researcher one topic at a time.",
+#     "system_prompt": RESEARCHER_INSTRUCTIONS.format(date=current_date),
+#     "tools": [tavily_search, think_tool],
+# }
+custom_graph = create_agent(
+    model=my_model,
+    tools=[tavily_search, think_tool],
+    system_prompt=RESEARCHER_INSTRUCTIONS.format(date=current_date),
+).with_config({
+    "recursion_limit": 500
+})
+
+# Use it as a custom subagent
+research_sub_agent = CompiledSubAgent(
+    name="research-agent",
+    description="Delegate research to the sub-agent researcher. Only give this researcher one topic at a time.",
+    runnable=custom_graph
+)
+
+
 async def create_agent_with_mcp():
     """Create agent with MCP tools loaded asynchronously."""
-    model = create_model()
+    # model = create_model()
     
     # Load MCP tools asynchronously
     mcp_tools = await alb_mcp_client.get_tools()
@@ -103,22 +120,22 @@ async def create_agent_with_mcp():
     
     # Create the agent
     agent = create_deep_agent(
-        model=model,
+        model=my_model,
         tools=all_tools,
         context_schema=CustomContext,
         system_prompt=INSTRUCTIONS,
         subagents=[research_sub_agent],
         middleware=[
             CustomSummarizationMiddleware(
-                model=model,
-                trigger=("tokens", 120000),
+                model=my_model,
+                trigger=("tokens", 80000),
                 keep=("messages", 6)
             ),
             CustomMemoryMiddleware(backend=(lambda rt: StateBackend(rt)),
                                    sources=[]),  # Replace None with actual backend
         ]
     ).with_config({
-        "recursion_limit":1000
+        "recursion_limit":500
     })
     return agent
 

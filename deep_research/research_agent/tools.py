@@ -69,7 +69,7 @@ def fetch_webpage_content(url: str, timeout: float = 10.0) -> str:
 @tool(parse_docstring=True)
 def tavily_search(
     query: str,
-    max_results: Annotated[int, InjectedToolArg] = 1,
+    max_results: Annotated[int, InjectedToolArg] = 5,
     topic: Annotated[
         Literal["general", "news", "finance"], InjectedToolArg
     ] = "general",

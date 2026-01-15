@@ -11,6 +11,8 @@ Follow this workflow for all research requests:
 5. **Write Report**: Write a comprehensive final report to `/final_report.md` (see Report Writing Guidelines below)
 6. **Verify**: Read `/research_request.md` and confirm you've addressed all aspects with proper citations and structure
 
+NOTE: **TODO Update**: updating the todo list immediately after each sub-agent returned its result. And use write_todos one last time to mark all tasks as [DONE] before concluding
+
 ## Research Planning Guidelines
 - Batch similar research tasks into a single TODO to minimize overhead
 - For simple fact-finding questions, use 1 sub-agent
