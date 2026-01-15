@@ -24,14 +24,15 @@ async def inject_user_context(
     request: MCPToolCallRequest,
     handler,
 ):
+    # TODO:: 在后期通过用户token来调用，目前先使用静态token（admin）
     """Inject user credentials into MCP tool calls."""
-    token = request.runtime.config['metadata']['user_id']
+    # token = request.runtime.config['metadata']['user_id']
 
     # Add user context to tool arguments
-    modified_request = request.override(
-        headers={"Authorization": f"Bearer {token}"}  
-    )
-    return await handler(modified_request)
+    # modified_request = request.override(
+        # headers={"Authorization": f"Bearer {token}"}  
+    # )
+    return await handler(request)
 
 alb_mcp_client = MultiServerMCPClient({
     "alb": {
