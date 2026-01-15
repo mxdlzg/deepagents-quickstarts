@@ -11,8 +11,28 @@ from markdownify import markdownify
 from tavily.tavily import TavilyClient
 from typing_extensions import Annotated, Literal
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.interceptors import MCPToolCallRequest, CallToolResult
+from dataclasses import dataclass
 
 tavily_client = TavilyClient()
+
+@dataclass
+class CustomContext:
+    pass
+
+async def inject_user_context(
+    request: MCPToolCallRequest,
+    handler,
+):
+    """Inject user credentials into MCP tool calls."""
+    token = request.runtime.config['metadata']['user_id']
+
+    # Add user context to tool arguments
+    modified_request = request.override(
+        headers={"Authorization": f"Bearer {token}"}  
+    )
+    return await handler(modified_request)
+
 alb_mcp_client = MultiServerMCPClient({
     "alb": {
         "transport": "http",
@@ -21,7 +41,7 @@ alb_mcp_client = MultiServerMCPClient({
             "Authorization": f"Bearer {os.getenv('ALB_MCP_TOKEN', 'alb_sk-xxxx')}",
         }
     }
-})
+}, tool_interceptors=[inject_user_context])
 
 
 def fetch_webpage_content(url: str, timeout: float = 10.0) -> str:

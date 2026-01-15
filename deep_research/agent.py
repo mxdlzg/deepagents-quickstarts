@@ -11,14 +11,15 @@ from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 from deepagents import create_deep_agent
 
-from research_agent.middlewares import CustomSummarizationMiddleware
+from research_agent.middlewares import CustomSummarizationMiddleware,CustomMemoryMiddleware
 from research_agent.prompts import (
     RESEARCHER_INSTRUCTIONS,
     RESEARCH_WORKFLOW_INSTRUCTIONS,
     SUBAGENT_DELEGATION_INSTRUCTIONS,
 )
-from research_agent.tools import tavily_search, think_tool, alb_mcp_client
+from research_agent.tools import CustomContext, tavily_search, think_tool, alb_mcp_client
 from langchain.agents.middleware.summarization import SummarizationMiddleware
+from deepagents.backends import StateBackend
 
 # Load environment variables
 load_dotenv()
@@ -104,6 +105,7 @@ async def create_agent_with_mcp():
     agent = create_deep_agent(
         model=model,
         tools=all_tools,
+        context_schema=CustomContext,
         system_prompt=INSTRUCTIONS,
         subagents=[research_sub_agent],
         middleware=[
@@ -111,9 +113,13 @@ async def create_agent_with_mcp():
                 model=model,
                 trigger=("tokens", 120000),
                 keep=("messages", 6)
-            )
+            ),
+            CustomMemoryMiddleware(backend=(lambda rt: StateBackend(rt)),
+                                   sources=[]),  # Replace None with actual backend
         ]
-    )
+    ).with_config({
+        "recursion_limit":1000
+    })
     return agent
 
 # Create the agent at module level by running the async function

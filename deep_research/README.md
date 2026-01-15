@@ -50,6 +50,16 @@ Run a local [LangGraph server](https://langchain-ai.github.io/langgraph/tutorial
 
 ```bash
 langgraph dev
+langgraph dev --debug-port 5678  --allow-blocking
+ {
+            "name": "Attach to LangGraph",
+            "type": "debugpy",
+            "request": "attach",
+            "connect": {
+                "host": "0.0.0.0",
+                "port": 5678
+            }
+}
 ```
 
 LangGraph server will open a new browser window with the Studio interface, which you can submit your search query to: 

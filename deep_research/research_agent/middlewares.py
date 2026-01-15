@@ -1,7 +1,46 @@
+from typing import Optional
+from deepagents import MemoryMiddleware
 from langchain.agents.middleware.summarization import SummarizationMiddleware
+from langchain_core.runnables import RunnableConfig
 
 class CustomSummarizationMiddleware(SummarizationMiddleware):
     """Custom Summarization Middleware with modified parameters."""
 
     def __init__(self, model, trigger: tuple[str, int] = ("tokens", 150000), keep: tuple[str, int] = ("messages", 8)):
         super().__init__(model=model, trigger=trigger, keep=keep)
+
+
+class CustomMemoryMiddleware(MemoryMiddleware):
+    """Custom Memory Middleware with extended functionality."""
+
+    def __init__(self, backend, sources: Optional[list[str]] = None):
+        super().__init__(backend=backend, sources=sources)
+
+    def before_agent(self, state, runtime, config):
+        print("CustomMemoryMiddleware: before_agent called")
+        print(f"State: {state}, Runtime: {runtime}, Config: {config}")
+        return super().before_agent(state, runtime, config)
+    
+    # def wrap_tool_call(self, request, handler):
+    #     print("CustomMemoryMiddleware: wrap_tool_call called")
+    #     return super().wrap_tool_call(request, handler)
+
+    # async def awrap_tool_call(self, request, handler):
+        # 1. 执行前逻辑：例如修改参数
+        # print(f"正在调用工具: {request}")
+        
+        # # 2. 调用原始处理器执行工具
+        # try:
+        #     response = await handler(request)
+        # except Exception as e:
+        #     # 3. 错误处理：可以在此处进行重试或返回自定义错误消息
+        #     from langchain.messages import ToolMessage
+        #     return ToolMessage(content=f"工具执行失败: {str(e)}", tool_call_id=request.tool_id)
+
+        # # 4. 执行后逻辑：例如修改返回结果
+        # if "sensitive_data" in response.content:
+        #     response.content = response.content.replace("sensitive_data", "***")
+            
+        # return response
+
+    # Add any custom methods or overrides as needed
