@@ -32,6 +32,12 @@ async def inject_user_context(
     # modified_request = request.override(
         # headers={"Authorization": f"Bearer {token}"}  
     # )
+    metadata = request.runtime.config.get("metadata", {}) or {}
+
+    # replace request.args with metadata info
+    new_args = {k: metadata.get(k, v) for k, v in (request.args or {}).items()}
+    request = request.override(args=new_args)
+
     return await handler(request)
 
 alb_mcp_client = MultiServerMCPClient({
