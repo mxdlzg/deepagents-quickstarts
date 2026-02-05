@@ -1,3 +1,6 @@
+[tool.setuptools.packages.find]
+include = ["notebook_agent*", "research_agent*"]
+
 [project]
 name = "deep-research-example"
 version = "0.1.0"

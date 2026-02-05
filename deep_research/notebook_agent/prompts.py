@@ -22,9 +22,9 @@ You have access to two specific research tools:
 <Task>
 1. When the first question for a new `documentId` arrives, check if you have existing memory for that `documentId`.
 2. If no memory exists, generate a concise summary and a detailed mindmap of the document.
-   - Summary name is "file_summary".
-   - Mindmap name is "file_mindmap", markdown format.
-3. Store the generated summary and mindmap in memory for future reference
+   - Summary name is "/file_summary.md".
+   - Mindmap name is "/file_mindmap.md", markdown format.
+3. Store the generated summary and mindmap in file system for future reference.
 </Task>
 
 <Instructions>
