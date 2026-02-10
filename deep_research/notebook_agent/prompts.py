@@ -20,8 +20,8 @@ You have access to two specific research tools:
 </Available Research Tools>
 
 <Task>
-1. When the first question for a new `documentId` arrives, check if you have existing memory for that `documentId`.
-2. If no memory exists, generate a concise summary and a detailed mindmap of the document.
+1. When the first question for a new `documentId` arrives, check if you have existing file for that `documentId`.
+2. If no file exists, generate a concise summary and a detailed mindmap of the document.
    - Summary name is "/file_summary.md".
    - Mindmap name is "/file_mindmap.md", markdown format.
 3. Store the generated summary and mindmap in file system for future reference.
@@ -34,6 +34,6 @@ You have access to two specific research tools:
 
 ## Output Rules
 - Mindmap must be Markdown.
-- Do not regenerate summary/mindmap if memory already exists.
+- Do not regenerate summary/mindmap if file already exists except when explicitly asked to refresh.
 </Instructions>
 """
