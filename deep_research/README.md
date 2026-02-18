@@ -156,3 +156,21 @@ The deep research agent adds the following custom tools beyond the built-in deep
 | `tavily_search` | Web search tool that uses Tavily purely as a URL discovery engine. Performs searches using Tavily API to find relevant URLs, fetches full webpage content via HTTP with proper User-Agent headers (avoiding 403 errors), converts HTML to markdown, and returns the complete content without summarization to preserve all information for the agent's analysis. Works with both Claude and Gemini models. |
 | `think_tool` | Strategic reflection mechanism that helps the agent pause and assess progress between searches, analyze findings, identify gaps, and plan next steps. |
 
+## Harness-Aligned Production Notes
+
+This project now aligns with DeepAgents Harness guidance for planning, subagents, HITL, and memory routing.
+
+- **HITL checkpoint**: `request_plan_approval` is configured in `interrupt_on`, creating a mandatory plan-approval pause.
+- **Hybrid retrieval routing**: `route_research` helps pick internal MCP, external web, or hybrid retrieval paths.
+- **Tenant-scoped memory**: memory paths are managed by `MemoryPathManager` with strict `user_id`/`mission_id` validation.
+- **Long-term memory route**: `create_tenant_backend` uses `CompositeBackend` to route `/memories/users/{user_id}/...` to `StoreBackend` when a LangGraph store is available.
+
+### Required runtime metadata
+
+For tenant isolation to work, each run must include metadata fields:
+
+- `user_id`
+- `mission_id`
+
+Without these values, the agent will fail fast to prevent cross-tenant memory leakage.
+

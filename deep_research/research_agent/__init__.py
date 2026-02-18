@@ -9,11 +9,32 @@ from research_agent.prompts import (
     RESEARCH_WORKFLOW_INSTRUCTIONS,
     SUBAGENT_DELEGATION_INSTRUCTIONS,
 )
-from research_agent.tools import tavily_search, think_tool
+from research_agent.backend_factory import create_tenant_backend
+from research_agent.tools import (
+    build_citation_ledger,
+    finalize_mission_report,
+    mission_storage_manifest,
+    persist_citation_ledger,
+    persist_sources_appendix,
+    render_sources_from_ledger,
+    request_plan_approval,
+    route_research,
+    tavily_search,
+    think_tool,
+)
 
 __all__ = [
     "tavily_search",
     "think_tool",
+    "route_research",
+    "request_plan_approval",
+    "build_citation_ledger",
+    "render_sources_from_ledger",
+    "mission_storage_manifest",
+    "persist_citation_ledger",
+    "persist_sources_appendix",
+    "finalize_mission_report",
+    "create_tenant_backend",
     "RESEARCHER_INSTRUCTIONS",
     "RESEARCH_WORKFLOW_INSTRUCTIONS",
     "SUBAGENT_DELEGATION_INSTRUCTIONS",

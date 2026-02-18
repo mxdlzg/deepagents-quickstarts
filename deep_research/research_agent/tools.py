@@ -6,19 +6,137 @@ using Tavily for URL discovery and fetching full webpage content.
 
 import os
 import httpx
+import json
+import hashlib
+from urllib.parse import urlparse, urlunparse
+from enum import Enum
 from langchain_core.tools import InjectedToolArg, tool
+from langchain.tools import ToolRuntime
 from markdownify import markdownify
 from tavily.tavily import TavilyClient
 from typing_extensions import Annotated, Literal
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain_mcp_adapters.interceptors import MCPToolCallRequest, CallToolResult
+from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 from dataclasses import dataclass
 
-tavily_client = TavilyClient()
+from research_agent.backend_factory import create_tenant_backend
+from research_agent.memory_paths import MemoryPathManager
+from research_agent.runtime_metadata import extract_metadata, require_tenant_ids
+
+tavily_client: TavilyClient | None = None
+
+ALB_MCP = "alb"
+ALLOWED_METADATA_KEYS = {"user_id", "mission_id", "tenant_role", "tenant_id"}
+
+
+class RetrievalRoute(str, Enum):
+    INTERNAL = "internal_kb"
+    EXTERNAL = "external_web"
+    HYBRID = "hybrid"
+
+
+class SourceChannel(str, Enum):
+    WEB = "web"
+    ALB_MCP = "alb_mcp"
+
+
+def get_tavily_client() -> TavilyClient:
+    global tavily_client
+    if tavily_client is None:
+        tavily_client = TavilyClient()
+    return tavily_client
+
+
+def _canonicalize_url(url: str) -> str:
+    if not url:
+        return ""
+    parsed = urlparse(url.strip())
+    normalized = parsed._replace(fragment="")
+    return urlunparse(normalized)
+
+
+def _stable_source_fingerprint(channel: SourceChannel, title: str, url: str, raw_citation: str) -> str:
+    normalized_url = _canonicalize_url(url)
+    base = f"{channel.value}|{title.strip().lower()}|{normalized_url}|{raw_citation.strip()}"
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
+
+
+def _new_citation_id(channel: SourceChannel, index: int) -> str:
+    prefix = "WEB" if channel == SourceChannel.WEB else "MCP"
+    return f"{prefix}-{index}"
+
+
+def _extract_existing_max_index(ledger: dict, channel: SourceChannel) -> int:
+    prefix = "WEB-" if channel == SourceChannel.WEB else "MCP-"
+    max_index = 0
+    for item in ledger.get("sources", []):
+        citation_id = str(item.get("citation_id", ""))
+        if citation_id.startswith(prefix):
+            suffix = citation_id.split("-")[-1]
+            if suffix.isdigit():
+                max_index = max(max_index, int(suffix))
+    return max_index
+
+
+def _get_path_manager_from_runtime(runtime: ToolRuntime) -> MemoryPathManager:
+    user_id, mission_id = require_tenant_ids(runtime.config)
+    return MemoryPathManager(user_id=user_id, mission_id=mission_id)
+
+
+def _merge_state_file_updates(runtime: ToolRuntime, files_update: dict | None) -> None:
+    if not files_update:
+        return
+    existing_files = dict(runtime.state.get("files", {}))
+    existing_files.update(files_update)
+    runtime.state["files"] = existing_files
+
+
+def _upsert_text_file(runtime: ToolRuntime, file_path: str, content: str) -> str:
+    backend = create_tenant_backend(runtime)
+
+    download = backend.download_files([file_path])[0]
+    if download.error == "file_not_found":
+        write_result = backend.write(file_path, content)
+        if write_result.error:
+            raise ValueError(write_result.error)
+        _merge_state_file_updates(runtime, write_result.files_update)
+        return "created"
+
+    if download.error is not None:
+        raise ValueError(f"Failed to access {file_path}: {download.error}")
+
+    previous_content = (download.content or b"").decode("utf-8")
+    if previous_content == content:
+        return "unchanged"
+
+    edit_result = backend.edit(
+        file_path=file_path,
+        old_string=previous_content,
+        new_string=content,
+        replace_all=False,
+    )
+    if edit_result.error:
+        raise ValueError(edit_result.error)
+    _merge_state_file_updates(runtime, edit_result.files_update)
+    return "updated"
+
+
+def _read_text_file(runtime: ToolRuntime, file_path: str) -> str:
+    backend = create_tenant_backend(runtime)
+    download = backend.download_files([file_path])[0]
+
+    if download.error == "file_not_found":
+        return ""
+
+    if download.error is not None:
+        raise ValueError(f"Failed to access {file_path}: {download.error}")
+
+    return (download.content or b"").decode("utf-8")
 
 @dataclass
 class CustomContext:
-    pass
+    user_id: str = ""
+    mission_id: str = ""
 
 async def inject_user_context(
     request: MCPToolCallRequest,
@@ -32,16 +150,20 @@ async def inject_user_context(
     # modified_request = request.override(
         # headers={"Authorization": f"Bearer {token}"}  
     # )
-    metadata = request.runtime.config.get("metadata", {}) or {}
+    metadata = extract_metadata(request.runtime.config)
 
-    # replace request.args with metadata info
-    new_args = {k: metadata.get(k, v) for k, v in (request.args or {}).items()}
+    new_args = dict(request.args or {})
+    for key in ALLOWED_METADATA_KEYS:
+        value = metadata.get(key)
+        if value is not None:
+            new_args[key] = value
+
     request = request.override(args=new_args)
 
     return await handler(request)
 
 alb_mcp_client = MultiServerMCPClient({
-    "alb": {
+    ALB_MCP: {
         "transport": "http",
         "url": os.getenv("ALB_MCP_URL", "http://localhost:3000/api/mcp"),
         "headers": {
@@ -49,6 +171,350 @@ alb_mcp_client = MultiServerMCPClient({
         }
     }
 }, tool_interceptors=[inject_user_context])
+ALB_MCP_CLIENT = alb_mcp_client
+
+
+def _decide_retrieval_route(
+    query: str,
+    need_freshness: bool,
+    prefer_internal: bool,
+) -> tuple[RetrievalRoute, str]:
+    query_lower = query.lower()
+    freshness_signals = (
+        "latest",
+        "today",
+        "current",
+        "news",
+        "recent",
+        "实时",
+        "最新",
+        "近况",
+    )
+    internal_signals = (
+        "internal",
+        "private",
+        "policy",
+        "playbook",
+        "history",
+        "内部",
+        "私有",
+        "制度",
+        "知识库",
+    )
+
+    has_freshness_signal = any(k in query_lower for k in freshness_signals)
+    has_internal_signal = any(k in query_lower for k in internal_signals)
+
+    if prefer_internal and (not need_freshness and not has_freshness_signal):
+        return RetrievalRoute.INTERNAL, "Explicit internal preference with no freshness requirement"
+    if need_freshness and (not prefer_internal and not has_internal_signal):
+        return RetrievalRoute.EXTERNAL, "Freshness required without private-knowledge dependency"
+    if has_internal_signal and has_freshness_signal:
+        return RetrievalRoute.HYBRID, "Query mixes internal-depth and external-freshness signals"
+    if prefer_internal and need_freshness:
+        return RetrievalRoute.HYBRID, "Both internal depth and external freshness are requested"
+    if has_internal_signal:
+        return RetrievalRoute.INTERNAL, "Internal/private knowledge signals detected"
+    if has_freshness_signal:
+        return RetrievalRoute.EXTERNAL, "Freshness/news signals detected"
+    return RetrievalRoute.HYBRID, "Default to hybrid retrieval for balanced depth and coverage"
+
+
+@tool(parse_docstring=True)
+def route_research(
+    query: str,
+    need_freshness: bool = False,
+    prefer_internal: bool = False,
+) -> str:
+    """Select retrieval route between ALB_MCP, web search, or hybrid.
+
+    Args:
+        query: User research question or subtask.
+        need_freshness: Whether the question explicitly requires latest information.
+        prefer_internal: Whether private/internal knowledge is prioritized.
+
+    Returns:
+        Routing recommendation with route, rationale, and execution plan.
+    """
+    route, reason = _decide_retrieval_route(
+        query=query,
+        need_freshness=need_freshness,
+        prefer_internal=prefer_internal,
+    )
+
+    if route == RetrievalRoute.INTERNAL:
+        execution_plan = [
+            "Call ALB_MCP tool(s) first for internal and historical depth",
+            "Preserve citation/source fields from ALB response",
+        ]
+    elif route == RetrievalRoute.EXTERNAL:
+        execution_plan = [
+            "Call tavily_search for external and latest context",
+            "Use returned web citations in the draft",
+        ]
+    else:
+        execution_plan = [
+            "Call ALB_MCP tools for internal depth and private context",
+            "Call tavily_search for latest external updates",
+            "Merge evidence and keep citations from both channels",
+        ]
+
+    return json.dumps(
+        {
+            "route": route.value,
+            "reason": reason,
+            "execution_plan": execution_plan,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+@tool(parse_docstring=True)
+def request_plan_approval(plan_markdown: str) -> str:
+    """Create an explicit pause point for human approval of the research plan.
+
+    Args:
+        plan_markdown: Detailed outline and execution plan that requires user confirmation.
+
+    Returns:
+        Approval gate message used for HITL interruption.
+    """
+    return (
+        "Plan approval checkpoint reached. Please review and approve or revise before execution.\n\n"
+        + plan_markdown
+    )
+
+
+@tool(parse_docstring=True)
+def build_citation_ledger(
+    evidence_json: str,
+    existing_ledger_json: str = "",
+) -> str:
+    """Build or update a structured citation ledger with deduplication.
+
+    Expected `evidence_json` format:
+    {
+      "evidence": [
+        {
+          "channel": "web" | "alb_mcp",
+          "title": "...",
+          "url": "...",
+          "section": "2.1 Market Overview",
+          "raw_citation": "optional raw citation marker from MCP",
+          "snippet": "optional supporting snippet"
+        }
+      ]
+    }
+
+    Expected `existing_ledger_json` format:
+    {
+      "sources": [...],
+      "by_fingerprint": {...}
+    }
+
+    Args:
+        evidence_json: JSON payload for new evidence items.
+        existing_ledger_json: Previous ledger JSON string to update in-place.
+
+    Returns:
+        Updated ledger JSON with source IDs and section mappings.
+    """
+    payload = json.loads(evidence_json or "{}")
+    evidence_items = payload.get("evidence", [])
+
+    if existing_ledger_json.strip():
+        ledger = json.loads(existing_ledger_json)
+    else:
+        ledger = {"sources": [], "by_fingerprint": {}, "section_map": {}}
+
+    web_index = _extract_existing_max_index(ledger, SourceChannel.WEB)
+    mcp_index = _extract_existing_max_index(ledger, SourceChannel.ALB_MCP)
+
+    for item in evidence_items:
+        channel = SourceChannel(item.get("channel", SourceChannel.WEB.value))
+        title = str(item.get("title", "Untitled Source"))
+        url = str(item.get("url", ""))
+        section = str(item.get("section", "General"))
+        raw_citation = str(item.get("raw_citation", ""))
+        snippet = str(item.get("snippet", ""))
+
+        fingerprint = _stable_source_fingerprint(channel, title, url, raw_citation)
+        existing_id = ledger.get("by_fingerprint", {}).get(fingerprint)
+
+        if existing_id is None:
+            if channel == SourceChannel.WEB:
+                web_index += 1
+                citation_id = _new_citation_id(channel, web_index)
+            else:
+                mcp_index += 1
+                citation_id = _new_citation_id(channel, mcp_index)
+
+            source_item = {
+                "citation_id": citation_id,
+                "channel": channel.value,
+                "title": title,
+                "url": _canonicalize_url(url),
+                "raw_citation": raw_citation,
+                "snippets": [snippet] if snippet else [],
+            }
+            ledger["sources"].append(source_item)
+            ledger["by_fingerprint"][fingerprint] = citation_id
+        else:
+            citation_id = existing_id
+            for source in ledger.get("sources", []):
+                if source.get("citation_id") == citation_id and snippet:
+                    snippets = source.setdefault("snippets", [])
+                    if snippet not in snippets:
+                        snippets.append(snippet)
+
+        section_refs = ledger.setdefault("section_map", {}).setdefault(section, [])
+        if citation_id not in section_refs:
+            section_refs.append(citation_id)
+
+    return json.dumps(ledger, ensure_ascii=False, indent=2)
+
+
+@tool(parse_docstring=True)
+def render_sources_from_ledger(
+    ledger_json: str,
+    section: str = "",
+) -> str:
+    """Render markdown source index from a structured citation ledger.
+
+    Args:
+        ledger_json: Citation ledger returned by build_citation_ledger.
+        section: Optional section name. If provided, only render sources used in that section.
+
+    Returns:
+        Markdown-formatted source list.
+    """
+    ledger = json.loads(ledger_json or "{}")
+    all_sources = ledger.get("sources", [])
+
+    if section:
+        target_ids = set(ledger.get("section_map", {}).get(section, []))
+        sources = [source for source in all_sources if source.get("citation_id") in target_ids]
+    else:
+        sources = all_sources
+
+    lines = ["### Sources"]
+    for source in sources:
+        citation_id = source.get("citation_id", "UNK")
+        title = source.get("title", "Untitled Source")
+        url = source.get("url", "")
+        channel = source.get("channel", "unknown")
+        raw_citation = source.get("raw_citation", "")
+        suffix = f" | raw_citation={raw_citation}" if raw_citation else ""
+        lines.append(f"[{citation_id}] ({channel}) {title}: {url}{suffix}")
+
+    if len(lines) == 1:
+        lines.append("(No sources)")
+
+    return "\n".join(lines)
+
+
+@tool(parse_docstring=True)
+def mission_storage_manifest(runtime: ToolRuntime) -> str:
+    """Return canonical tenant-isolated artifact paths for current mission.
+
+    Args:
+        runtime: Injected tool runtime.
+
+    Returns:
+        JSON with canonical mission/user scoped storage paths.
+    """
+    path_manager = _get_path_manager_from_runtime(runtime)
+    payload = {
+        "user_profile_preferences": str(path_manager.user_profile_preferences()),
+        "mission_root": str(path_manager.mission_root()),
+        "raw_materials_dir": str(path_manager.raw_materials_dir()),
+        "knowledge_graph_dir": str(path_manager.knowledge_graph_dir()),
+        "drafts_dir": str(path_manager.drafts_dir()),
+        "citation_ledger_path": path_manager.mission_path("knowledge_graph", "citation_ledger.json"),
+        "sources_appendix_path": path_manager.mission_path("drafts", "sources_appendix.md"),
+        "final_report_path": path_manager.mission_path("drafts", "final_report.md"),
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+@tool(parse_docstring=True)
+def persist_citation_ledger(
+    ledger_json: str,
+    runtime: ToolRuntime,
+) -> str:
+    """Persist citation ledger into tenant-isolated mission knowledge graph path.
+
+    Args:
+        ledger_json: Ledger JSON generated by build_citation_ledger.
+        runtime: Injected tool runtime.
+
+    Returns:
+        Status message with storage path.
+    """
+    path_manager = _get_path_manager_from_runtime(runtime)
+    ledger_path = path_manager.mission_path("knowledge_graph", "citation_ledger.json")
+    status = _upsert_text_file(runtime=runtime, file_path=ledger_path, content=ledger_json)
+    return f"Citation ledger {status}: {ledger_path}"
+
+
+@tool(parse_docstring=True)
+def persist_sources_appendix(
+    sources_markdown: str,
+    runtime: ToolRuntime,
+) -> str:
+    """Persist rendered source appendix into tenant-isolated mission drafts path.
+
+    Args:
+        sources_markdown: Markdown returned by render_sources_from_ledger.
+        runtime: Injected tool runtime.
+
+    Returns:
+        Status message with storage path.
+    """
+    path_manager = _get_path_manager_from_runtime(runtime)
+    sources_path = path_manager.mission_path("drafts", "sources_appendix.md")
+    status = _upsert_text_file(runtime=runtime, file_path=sources_path, content=sources_markdown)
+    return f"Sources appendix {status}: {sources_path}"
+
+
+@tool(parse_docstring=True)
+def finalize_mission_report(
+    report_body_markdown: str,
+    appendix_markdown: str = "",
+    runtime: ToolRuntime | None = None,
+) -> str:
+    """Compose and persist the mission final report with sources appendix.
+
+    If `appendix_markdown` is empty, this tool attempts to load
+    `/drafts/sources_appendix.md` from the current mission scope.
+
+    Args:
+        report_body_markdown: Main report content.
+        appendix_markdown: Optional appendix markdown content.
+        runtime: Injected tool runtime.
+
+    Returns:
+        Status message with final report path.
+    """
+    if runtime is None:
+        raise ValueError("ToolRuntime is required")
+
+    path_manager = _get_path_manager_from_runtime(runtime)
+    appendix_path = path_manager.mission_path("drafts", "sources_appendix.md")
+    final_report_path = path_manager.mission_path("drafts", "final_report.md")
+
+    appendix = appendix_markdown.strip()
+    if not appendix:
+        appendix = _read_text_file(runtime=runtime, file_path=appendix_path).strip()
+
+    if appendix:
+        composed = f"{report_body_markdown.rstrip()}\n\n---\n\n{appendix}\n"
+    else:
+        composed = report_body_markdown.rstrip() + "\n"
+
+    status = _upsert_text_file(runtime=runtime, file_path=final_report_path, content=composed)
+    return f"Final report {status}: {final_report_path}"
 
 
 def fetch_webpage_content(url: str, timeout: float = 10.0) -> str:
@@ -94,7 +560,7 @@ def tavily_search(
         Formatted search results with full webpage content
     """
     # Use Tavily to discover URLs
-    search_results = tavily_client.search(
+    search_results = get_tavily_client().search(
         query,
         max_results=max_results,
         topic=topic,
@@ -102,14 +568,16 @@ def tavily_search(
 
     # Fetch full content for each URL
     result_texts = []
+    source_lines = []
     for result in search_results.get("results", []):
         url = result["url"]
         title = result["title"]
+        citation_id = f"WEB-{len(source_lines) + 1}"
 
         # Fetch webpage content
         content = fetch_webpage_content(url)
 
-        result_text = f"""## {title}
+        result_text = f"""## {title} [{citation_id}]
 **URL:** {url}
 
 {content}
@@ -117,11 +585,15 @@ def tavily_search(
 ---
 """
         result_texts.append(result_text)
+        source_lines.append(f"[{citation_id}] {title}: {url}")
 
     # Format final response
     response = f"""🔍 Found {len(result_texts)} result(s) for '{query}':
 
-{chr(10).join(result_texts)}"""
+{chr(10).join(result_texts)}
+
+### Sources
+{chr(10).join(source_lines)}"""
 
     return response
 

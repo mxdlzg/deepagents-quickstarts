@@ -1,7 +1,10 @@
-from typing import Optional
+from typing import Any, Optional
 from deepagents import MemoryMiddleware
 from langchain.agents.middleware.summarization import SummarizationMiddleware
 from langchain_core.runnables import RunnableConfig
+
+from research_agent.memory_paths import MemoryPathManager
+from research_agent.runtime_metadata import require_tenant_ids
 
 class CustomSummarizationMiddleware(SummarizationMiddleware):
     """Custom Summarization Middleware with modified parameters."""
@@ -19,9 +22,14 @@ class CustomMemoryMiddleware(MemoryMiddleware):
     def __init__(self, backend, sources: Optional[list[str]] = None):
         super().__init__(backend=backend, sources=sources)
 
+    @staticmethod
+    def _path_manager_from_config(config: RunnableConfig | dict[str, Any]) -> MemoryPathManager:
+        user_id, mission_id = require_tenant_ids(config)
+        return MemoryPathManager(user_id=user_id, mission_id=mission_id)
+
     def before_agent(self, state, runtime, config):
-        print("CustomMemoryMiddleware: before_agent called")
-        print(f"State: {state}, Runtime: {runtime}, Config: {config}")
+        path_manager = self._path_manager_from_config(config)
+        self.sources = [str(path_manager.user_profile_preferences())]
         return super().before_agent(state, runtime, config)
     
     # def wrap_tool_call(self, request, handler):

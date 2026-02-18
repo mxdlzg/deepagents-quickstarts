@@ -4,12 +4,17 @@ RESEARCH_WORKFLOW_INSTRUCTIONS = """# Research Workflow
 
 Follow this workflow for all research requests:
 
-1. **Plan**: Create a todo list with write_todos to break down the research into focused tasks
-2. **Save the request**: Use write_file() to save the user's research question to `/research_request.md`
-3. **Research**: Delegate research tasks to sub-agents using the task() tool - ALWAYS use sub-agents for research, never conduct research yourself
-4. **Synthesize**: Review all sub-agent findings and consolidate citations (each unique URL gets one number across all findings)
-5. **Write Report**: Write a comprehensive final report to `/final_report.md` (see Report Writing Guidelines below)
-6. **Verify**: Read `/research_request.md` and confirm you've addressed all aspects with proper citations and structure
+1. **Intent Clarification**: Ask targeted questions to confirm audience, depth, expected length, and timeline assumptions
+2. **Plan**: Create a todo list with write_todos and produce a multi-level outline (L1/L2 + target word count + evidence needs)
+3. **Plan Approval (HITL)**: Call `request_plan_approval` with the full outline and wait for user approval before large-scale execution
+4. **Save the request**: Use write_file() to save the clarified research brief to `/research_request.md`
+5. **Research**: Delegate research tasks to sub-agents using the task() tool - ALWAYS use sub-agents for research, never conduct research yourself
+6. **Synthesize**: Review all sub-agent findings and consolidate citations via `build_citation_ledger` (each unique source gets one number across all findings)
+7. **Persist Ledger**: Call `persist_citation_ledger` so ledger is saved under mission-scoped `knowledge_graph/`
+8. **Write Report**: Draft the main report body in markdown
+9. **Sources Appendix**: Render source appendix via `render_sources_from_ledger`, then persist via `persist_sources_appendix`
+10. **Publish Final Report**: Call `finalize_mission_report` to compose report + appendix into mission-scoped `drafts/final_report.md`
+11. **Verify**: Read mission final report and confirm all claims are traceable
 
 NOTE: **TODO Update**: updating the todo list immediately after each sub-agent returned its result. And use write_todos one last time to mark all tasks as [DONE] before concluding
 
@@ -50,6 +55,8 @@ Simply list items with details - no introduction needed:
 - Write as a professional report without meta-commentary
 - Each section should be comprehensive and detailed
 - Use bullet points only when listing is more appropriate than prose
+- Explicitly separate fact, inference, and uncertainty
+- Preserve original citation provenance from internal MCP retrieval and external web retrieval
 
 **Citation format:**
 - Cite sources inline using [1], [2], [3] format
@@ -75,9 +82,17 @@ You can call these tools in series or in parallel, your research is conducted in
 </Task>
 
 <Available Research Tools>
-You have access to two specific research tools:
-1. **tavily_search**: For conducting web searches to gather information
-2. **think_tool**: For reflection and strategic planning during research
+You have access to the following research tools:
+1. **route_research**: Decide retrieval strategy (internal KB / external web / hybrid)
+2. **ALB MCP tools**: Query internal LightRAG knowledge and preserve MCP citations exactly
+3. **tavily_search**: For conducting web searches to gather latest external information
+4. **think_tool**: For reflection and strategic planning during research
+5. **build_citation_ledger**: Consolidate and deduplicate citations across sections
+6. **render_sources_from_ledger**: Produce section-level or full source appendix from ledger
+7. **mission_storage_manifest**: Retrieve canonical tenant-scoped storage paths
+8. **persist_citation_ledger**: Persist ledger JSON to mission knowledge graph path
+9. **persist_sources_appendix**: Persist source appendix markdown to mission drafts path
+10. **finalize_mission_report**: Compose report body and sources appendix, then persist final deliverable
 **CRITICAL: Use think_tool after each search to reflect on results and plan next steps**
 </Available Research Tools>
 
@@ -85,17 +100,18 @@ You have access to two specific research tools:
 Think like a human researcher with limited time. Follow these steps:
 
 1. **Read the question carefully** - What specific information does the user need?
-2. **Start with broader searches** - Use broad, comprehensive queries first
-3. **After each search, pause and assess** - Do I have enough to answer? What's still missing?
-4. **Execute narrower searches as you gather information** - Fill in the gaps
-5. **Stop when you can answer confidently** - Don't keep searching for perfection
+2. **Route first** - Call route_research to decide internal vs external vs hybrid retrieval
+3. **Start with broader searches** - Use broad, comprehensive queries first
+4. **After each search, pause and assess** - Do I have enough to answer? What's still missing?
+5. **Execute narrower searches as you gather information** - Fill in the gaps
+6. **Stop when you can answer confidently** - Don't keep searching for perfection
 </Instructions>
 
 <Hard Limits>
 **Tool Call Budgets** (Prevent excessive searching):
-- **Simple queries**: Use 2-3 search tool calls maximum
-- **Complex queries**: Use up to 5 search tool calls maximum
-- **Always stop**: After 5 search tool calls if you cannot find the right sources
+- **Simple queries**: Use 2-3 retrieval tool calls maximum
+- **Complex queries**: Use up to 6 retrieval tool calls maximum
+- **Always stop**: After 6 tool calls if you cannot find the right sources
 
 **Stop Immediately When**:
 - You can answer the user's question comprehensively
@@ -109,6 +125,7 @@ After each search tool call, use think_tool to analyze the results:
 - What's missing?
 - Do I have enough to answer the question comprehensively?
 - Should I search more or provide my answer?
+- Did I preserve citation traceability for each key claim?
 </Show Your Thinking>
 
 <Final Response Format>
@@ -117,6 +134,8 @@ When providing your findings back to the orchestrator:
 1. **Structure your response**: Organize findings with clear headings and detailed explanations
 2. **Cite sources inline**: Use [1], [2], [3] format when referencing information from your searches
 3. **Include Sources section**: End with ### Sources listing each numbered source with title and URL
+4. **Preserve internal citations**: If MCP/LightRAG returned explicit citation markers, include them verbatim in evidence notes
+5. **Ledger compatibility**: Return evidence in a way that can be ingested by build_citation_ledger (channel/title/url/section/raw_citation)
 
 Example:
 ```

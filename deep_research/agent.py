@@ -6,21 +6,34 @@ for conducting web research with strategic thinking and context management.
 
 import os
 from datetime import datetime
+import asyncio
 
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
-from deepagents import SubAgent, create_deep_agent, CompiledSubAgent
+from deepagents import create_deep_agent, CompiledSubAgent
 from langchain.agents import create_agent
 
-from research_agent.middlewares import CustomSummarizationMiddleware,CustomMemoryMiddleware
+from research_agent.middlewares import CustomSummarizationMiddleware, CustomMemoryMiddleware
+from research_agent.backend_factory import create_tenant_backend
 from research_agent.prompts import (
     RESEARCHER_INSTRUCTIONS,
     RESEARCH_WORKFLOW_INSTRUCTIONS,
     SUBAGENT_DELEGATION_INSTRUCTIONS,
 )
-from research_agent.tools import CustomContext, tavily_search, think_tool, alb_mcp_client
-from langchain.agents.middleware.summarization import SummarizationMiddleware
-from deepagents.backends import StateBackend
+from research_agent.tools import (
+    ALB_MCP_CLIENT,
+    CustomContext,
+    build_citation_ledger,
+    finalize_mission_report,
+    mission_storage_manifest,
+    persist_citation_ledger,
+    persist_sources_appendix,
+    request_plan_approval,
+    render_sources_from_ledger,
+    route_research,
+    tavily_search,
+    think_tool,
+)
 
 # Load environment variables
 load_dotenv()
@@ -42,6 +55,8 @@ INSTRUCTIONS = (
         max_concurrent_research_units=max_concurrent_research_units,
         max_researcher_iterations=max_researcher_iterations,
     )
+    + "\n\n"
+    + "HITL requirement: You MUST call request_plan_approval before delegating large-scale research tasks."
 )
 
 def create_model():
@@ -85,39 +100,43 @@ def create_model():
 
 my_model = create_model()
 
-# Create research sub-agent
-# research_sub_agent = {
-#     "name": "research-agent",
-#     "description": "Delegate research to the sub-agent researcher. Only give this researcher one topic at a time.",
-#     "system_prompt": RESEARCHER_INSTRUCTIONS.format(date=current_date),
-#     "tools": [tavily_search, think_tool],
-# }
-custom_graph = create_agent(
-    model=my_model,
-    tools=[tavily_search, think_tool],
-    system_prompt=RESEARCHER_INSTRUCTIONS.format(date=current_date),
-).with_config({
-    "recursion_limit": 500
-})
 
-# Use it as a custom subagent
-research_sub_agent = CompiledSubAgent(
-    name="research-agent",
-    description="Delegate research to the sub-agent researcher. Only give this researcher one topic at a time.",
-    runnable=custom_graph
-)
+def create_research_subagent(tools):
+    custom_graph = create_agent(
+        model=my_model,
+        tools=tools,
+        system_prompt=RESEARCHER_INSTRUCTIONS.format(date=current_date),
+    ).with_config({
+        "recursion_limit": 500
+    })
+
+    return CompiledSubAgent(
+        name="research-agent",
+        description="Delegate research to the sub-agent researcher. Only give this researcher one topic at a time.",
+        runnable=custom_graph,
+    )
 
 
 async def create_agent_with_mcp():
     """Create agent with MCP tools loaded asynchronously."""
-    # model = create_model()
-    
     # Load MCP tools asynchronously
-    mcp_tools = await alb_mcp_client.get_tools()
-    
+    mcp_tools = await ALB_MCP_CLIENT.get_tools()
+
     # Combine base tools with MCP tools
-    all_tools = [tavily_search, think_tool] + mcp_tools
-    
+    all_tools = [
+        route_research,
+        tavily_search,
+        think_tool,
+        request_plan_approval,
+        build_citation_ledger,
+        render_sources_from_ledger,
+        mission_storage_manifest,
+        persist_citation_ledger,
+        persist_sources_appendix,
+        finalize_mission_report,
+    ] + mcp_tools
+    research_sub_agent = create_research_subagent(all_tools)
+
     # Create the agent
     agent = create_deep_agent(
         model=my_model,
@@ -125,20 +144,23 @@ async def create_agent_with_mcp():
         context_schema=CustomContext,
         system_prompt=INSTRUCTIONS,
         subagents=[research_sub_agent],
+        backend=create_tenant_backend,
+        interrupt_on={"request_plan_approval": True},
         middleware=[
             CustomSummarizationMiddleware(
                 model=my_model,
                 trigger=("tokens", 80000),
                 keep=("messages", 6)
             ),
-            CustomMemoryMiddleware(backend=(lambda rt: StateBackend(rt)),
-                                   sources=[]),  # Replace None with actual backend
+            CustomMemoryMiddleware(
+                backend=create_tenant_backend,
+                sources=[],
+            ),
         ]
     ).with_config({
-        "recursion_limit":500
+        "recursion_limit": 500
     })
     return agent
 
 # Create the agent at module level by running the async function
-import asyncio
 agent = asyncio.run(create_agent_with_mcp())
