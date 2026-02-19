@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from research_agent.backend_factory import create_tenant_backend
 from research_agent.memory_paths import MemoryPathManager
-from research_agent.runtime_metadata import extract_metadata, require_tenant_ids
+from research_agent.runtime_metadata import extract_metadata, require_tenant_ids, resolve_config_like
 
 tavily_client: TavilyClient | None = None
 
@@ -79,7 +79,7 @@ def _extract_existing_max_index(ledger: dict, channel: SourceChannel) -> int:
 
 
 def _get_path_manager_from_runtime(runtime: ToolRuntime) -> MemoryPathManager:
-    user_id, mission_id = require_tenant_ids(runtime.config)
+    user_id, mission_id = require_tenant_ids(resolve_config_like(runtime))
     return MemoryPathManager(user_id=user_id, mission_id=mission_id)
 
 
@@ -137,6 +137,7 @@ def _read_text_file(runtime: ToolRuntime, file_path: str) -> str:
 class CustomContext:
     user_id: str = ""
     mission_id: str = ""
+    alb_mcp_token: str = ""
 
 async def inject_user_context(
     request: MCPToolCallRequest,
@@ -150,15 +151,16 @@ async def inject_user_context(
     # modified_request = request.override(
         # headers={"Authorization": f"Bearer {token}"}  
     # )
-    metadata = extract_metadata(request.runtime.config)
+    metadata = extract_metadata(resolve_config_like(request.runtime))
 
+    token = metadata.get("alb_mcp_token", "alb-sk-devtoken")
     new_args = dict(request.args or {})
     for key in ALLOWED_METADATA_KEYS:
         value = metadata.get(key)
         if value is not None:
             new_args[key] = value
 
-    request = request.override(args=new_args)
+    request = request.override(args=new_args, headers={"Authorization": f"Bearer {token}"})
 
     return await handler(request)
 
@@ -481,8 +483,8 @@ def persist_sources_appendix(
 @tool(parse_docstring=True)
 def finalize_mission_report(
     report_body_markdown: str,
+    runtime: ToolRuntime,
     appendix_markdown: str = "",
-    runtime: ToolRuntime | None = None,
 ) -> str:
     """Compose and persist the mission final report with sources appendix.
 
@@ -497,9 +499,6 @@ def finalize_mission_report(
     Returns:
         Status message with final report path.
     """
-    if runtime is None:
-        raise ValueError("ToolRuntime is required")
-
     path_manager = _get_path_manager_from_runtime(runtime)
     appendix_path = path_manager.mission_path("drafts", "sources_appendix.md")
     final_report_path = path_manager.mission_path("drafts", "final_report.md")

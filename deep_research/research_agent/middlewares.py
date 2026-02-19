@@ -4,7 +4,7 @@ from langchain.agents.middleware.summarization import SummarizationMiddleware
 from langchain_core.runnables import RunnableConfig
 
 from research_agent.memory_paths import MemoryPathManager
-from research_agent.runtime_metadata import require_tenant_ids
+from research_agent.runtime_metadata import require_tenant_ids, resolve_config_like
 
 class CustomSummarizationMiddleware(SummarizationMiddleware):
     """Custom Summarization Middleware with modified parameters."""
@@ -24,7 +24,7 @@ class CustomMemoryMiddleware(MemoryMiddleware):
 
     @staticmethod
     def _path_manager_from_config(config: RunnableConfig | dict[str, Any]) -> MemoryPathManager:
-        user_id, mission_id = require_tenant_ids(config)
+        user_id, mission_id = require_tenant_ids(resolve_config_like(config))
         return MemoryPathManager(user_id=user_id, mission_id=mission_id)
 
     def before_agent(self, state, runtime, config):
