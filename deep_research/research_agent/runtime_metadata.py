@@ -15,13 +15,14 @@ def extract_metadata(config_like: Any) -> dict[str, Any]:
     2) config.configurable.metadata
     3) config.configurable.thread.metadata
     4) config.configurable.thread_config.metadata
+    5) config.context.thread.metadata
     """
     if not isinstance(config_like, dict):
         return {}
 
     top_level = config_like.get("metadata")
     if isinstance(top_level, dict):
-        if isinstance(top_level.get("user_id"), str) and isinstance(top_level.get("mission_id"), str):
+        if isinstance(top_level.get("user_id"), str):
             return top_level
 
         nested_thread = top_level.get("thread")
@@ -62,12 +63,17 @@ def extract_metadata(config_like: Any) -> dict[str, Any]:
 def require_tenant_ids(config_like: Any) -> tuple[str, str]:
     metadata = extract_metadata(config_like)
     user_id = metadata.get("user_id")
-    mission_id = metadata.get("mission_id")
+    thread_id = metadata.get("thread_id") or metadata.get("mission_id")
 
-    if not user_id or not mission_id:
-        raise ValueError("metadata.user_id and metadata.mission_id are required")
+    if not thread_id and isinstance(config_like, dict):
+        configurable = config_like.get("configurable")
+        if isinstance(configurable, dict):
+            thread_id = configurable.get("thread_id")
 
-    return str(user_id), str(mission_id)
+    if not user_id or not thread_id:
+        raise ValueError("metadata.user_id and thread_id (or configurable.thread_id) are required")
+
+    return str(user_id), str(thread_id)
 
 
 def resolve_config_like(runtime_or_config: Any) -> dict[str, Any]:

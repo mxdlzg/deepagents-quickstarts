@@ -24,8 +24,8 @@ class CustomMemoryMiddleware(MemoryMiddleware):
 
     @staticmethod
     def _path_manager_from_config(config: RunnableConfig | dict[str, Any]) -> MemoryPathManager:
-        user_id, mission_id = require_tenant_ids(resolve_config_like(config))
-        return MemoryPathManager(user_id=user_id, mission_id=mission_id)
+        user_id, thread_id = require_tenant_ids(resolve_config_like(config))
+        return MemoryPathManager(user_id=user_id, thread_id=thread_id)
 
     def before_agent(self, state, runtime, config):
         path_manager = self._path_manager_from_config(config)

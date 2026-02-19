@@ -26,7 +26,7 @@ from research_agent.runtime_metadata import extract_metadata, require_tenant_ids
 tavily_client: TavilyClient | None = None
 
 ALB_MCP = "alb"
-ALLOWED_METADATA_KEYS = {"user_id", "mission_id", "tenant_role", "tenant_id"}
+ALLOWED_METADATA_KEYS = {"user_id", "thread_id", "mission_id", "tenant_role", "tenant_id"}
 
 
 class RetrievalRoute(str, Enum):
@@ -79,8 +79,8 @@ def _extract_existing_max_index(ledger: dict, channel: SourceChannel) -> int:
 
 
 def _get_path_manager_from_runtime(runtime: ToolRuntime) -> MemoryPathManager:
-    user_id, mission_id = require_tenant_ids(resolve_config_like(runtime))
-    return MemoryPathManager(user_id=user_id, mission_id=mission_id)
+    user_id, thread_id = require_tenant_ids(resolve_config_like(runtime))
+    return MemoryPathManager(user_id=user_id, thread_id=thread_id)
 
 
 def _merge_state_file_updates(runtime: ToolRuntime, files_update: dict | None) -> None:
@@ -136,7 +136,6 @@ def _read_text_file(runtime: ToolRuntime, file_path: str) -> str:
 @dataclass
 class CustomContext:
     user_id: str = ""
-    mission_id: str = ""
     alb_mcp_token: str = ""
 
 async def inject_user_context(
@@ -429,13 +428,14 @@ def mission_storage_manifest(runtime: ToolRuntime) -> str:
     path_manager = _get_path_manager_from_runtime(runtime)
     payload = {
         "user_profile_preferences": str(path_manager.user_profile_preferences()),
+        "thread_root": str(path_manager.thread_root()),
         "mission_root": str(path_manager.mission_root()),
         "raw_materials_dir": str(path_manager.raw_materials_dir()),
         "knowledge_graph_dir": str(path_manager.knowledge_graph_dir()),
         "drafts_dir": str(path_manager.drafts_dir()),
-        "citation_ledger_path": path_manager.mission_path("knowledge_graph", "citation_ledger.json"),
-        "sources_appendix_path": path_manager.mission_path("drafts", "sources_appendix.md"),
-        "final_report_path": path_manager.mission_path("drafts", "final_report.md"),
+        "citation_ledger_path": path_manager.thread_path("knowledge_graph", "citation_ledger.json"),
+        "sources_appendix_path": path_manager.thread_path("drafts", "sources_appendix.md"),
+        "final_report_path": path_manager.thread_path("drafts", "final_report.md"),
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
@@ -455,7 +455,7 @@ def persist_citation_ledger(
         Status message with storage path.
     """
     path_manager = _get_path_manager_from_runtime(runtime)
-    ledger_path = path_manager.mission_path("knowledge_graph", "citation_ledger.json")
+    ledger_path = path_manager.thread_path("knowledge_graph", "citation_ledger.json")
     status = _upsert_text_file(runtime=runtime, file_path=ledger_path, content=ledger_json)
     return f"Citation ledger {status}: {ledger_path}"
 
@@ -475,7 +475,7 @@ def persist_sources_appendix(
         Status message with storage path.
     """
     path_manager = _get_path_manager_from_runtime(runtime)
-    sources_path = path_manager.mission_path("drafts", "sources_appendix.md")
+    sources_path = path_manager.thread_path("drafts", "sources_appendix.md")
     status = _upsert_text_file(runtime=runtime, file_path=sources_path, content=sources_markdown)
     return f"Sources appendix {status}: {sources_path}"
 
@@ -500,8 +500,8 @@ def finalize_mission_report(
         Status message with final report path.
     """
     path_manager = _get_path_manager_from_runtime(runtime)
-    appendix_path = path_manager.mission_path("drafts", "sources_appendix.md")
-    final_report_path = path_manager.mission_path("drafts", "final_report.md")
+    appendix_path = path_manager.thread_path("drafts", "sources_appendix.md")
+    final_report_path = path_manager.thread_path("drafts", "final_report.md")
 
     appendix = appendix_markdown.strip()
     if not appendix:
