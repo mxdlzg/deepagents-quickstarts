@@ -40,6 +40,39 @@ class SourceChannel(str, Enum):
     ALB_MCP = "alb_mcp"
 
 
+def _normalize_source_channel(channel_value: str | None) -> SourceChannel:
+    if channel_value is None:
+        return SourceChannel.WEB
+
+    normalized = str(channel_value).strip().lower()
+
+    web_aliases = {
+        "web",
+        "web_search",
+        "tavily",
+        "tavily_search",
+        "search",
+        "external_web",
+    }
+    mcp_aliases = {
+        "alb_mcp",
+        "mcp",
+        "internal_kb",
+        "internal",
+        "lightrag",
+    }
+
+    if normalized in web_aliases:
+        return SourceChannel.WEB
+    if normalized in mcp_aliases:
+        return SourceChannel.ALB_MCP
+
+    try:
+        return SourceChannel(normalized)
+    except ValueError:
+        return SourceChannel.WEB
+
+
 def get_tavily_client() -> TavilyClient:
     global tavily_client
     if tavily_client is None:
@@ -333,7 +366,7 @@ def build_citation_ledger(
     mcp_index = _extract_existing_max_index(ledger, SourceChannel.ALB_MCP)
 
     for item in evidence_items:
-        channel = SourceChannel(item.get("channel", SourceChannel.WEB.value))
+        channel = _normalize_source_channel(item.get("channel"))
         title = str(item.get("title", "Untitled Source"))
         url = str(item.get("url", ""))
         section = str(item.get("section", "General"))
