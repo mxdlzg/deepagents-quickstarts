@@ -166,6 +166,14 @@ def _read_text_file(runtime: ToolRuntime, file_path: str) -> str:
 
     return (download.content or b"").decode("utf-8")
 
+
+def _truncate_text(text: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n\n[Truncated for context budget]"
+
 @dataclass
 class CustomContext:
     user_id: str = ""
@@ -549,7 +557,7 @@ def finalize_mission_report(
     return f"Final report {status}: {final_report_path}"
 
 
-def fetch_webpage_content(url: str, timeout: float = 10.0) -> str:
+def fetch_webpage_content(url: str, timeout: float = 10.0, max_chars: int = 6000) -> str:
     """Fetch and convert webpage content to markdown.
 
     Args:
@@ -566,7 +574,8 @@ def fetch_webpage_content(url: str, timeout: float = 10.0) -> str:
     try:
         response = httpx.get(url, headers=headers, timeout=timeout)
         response.raise_for_status()
-        return markdownify(response.text)
+        content = markdownify(response.text)
+        return _truncate_text(content, max_chars=max_chars)
     except Exception as e:
         return f"Error fetching content from {url}: {str(e)}"
 
@@ -575,6 +584,8 @@ def fetch_webpage_content(url: str, timeout: float = 10.0) -> str:
 def tavily_search(
     query: str,
     max_results: Annotated[int, InjectedToolArg] = 5,
+    max_chars_per_result: Annotated[int, InjectedToolArg] = 5000,
+    max_total_chars: Annotated[int, InjectedToolArg] = 20000,
     topic: Annotated[
         Literal["general", "news", "finance"], InjectedToolArg
     ] = "general",
@@ -586,6 +597,8 @@ def tavily_search(
     Args:
         query: Search query to execute
         max_results: Maximum number of results to return (default: 1)
+        max_chars_per_result: Maximum characters kept per fetched page (default: 5000)
+        max_total_chars: Maximum total characters kept across all results (default: 20000)
         topic: Topic filter - 'general', 'news', or 'finance' (default: 'general')
 
     Returns:
@@ -601,13 +614,20 @@ def tavily_search(
     # Fetch full content for each URL
     result_texts = []
     source_lines = []
+    accumulated_chars = 0
     for result in search_results.get("results", []):
         url = result["url"]
         title = result["title"]
         citation_id = f"WEB-{len(source_lines) + 1}"
 
         # Fetch webpage content
-        content = fetch_webpage_content(url)
+        remaining_budget = max_total_chars - accumulated_chars
+        if remaining_budget <= 0:
+            break
+
+        effective_max_chars = min(max_chars_per_result, remaining_budget)
+        content = fetch_webpage_content(url, max_chars=effective_max_chars)
+        accumulated_chars += len(content)
 
         result_text = f"""## {title} [{citation_id}]
 **URL:** {url}
@@ -618,6 +638,9 @@ def tavily_search(
 """
         result_texts.append(result_text)
         source_lines.append(f"[{citation_id}] {title}: {url}")
+
+    if len(search_results.get("results", [])) > len(source_lines):
+        source_lines.append("[INFO] Additional results omitted due to context budget.")
 
     # Format final response
     response = f"""🔍 Found {len(result_texts)} result(s) for '{query}':

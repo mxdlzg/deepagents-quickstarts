@@ -106,6 +106,13 @@ def create_research_subagent(tools):
         model=my_model,
         tools=tools,
         system_prompt=RESEARCHER_INSTRUCTIONS.format(date=current_date),
+        middleware=[
+            CustomSummarizationMiddleware(
+                model=my_model,
+                trigger=("tokens", 90000),
+                keep=("messages", 4),
+            )
+        ],
     ).with_config({
         "recursion_limit": 500
     })
