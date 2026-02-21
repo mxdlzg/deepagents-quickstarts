@@ -29,6 +29,7 @@ from research_agent.tools import (
     mission_storage_manifest,
     persist_citation_ledger,
     persist_sources_appendix,
+    publish_final_report,
     request_plan_approval,
     render_sources_from_ledger,
     route_research,
@@ -59,6 +60,8 @@ INSTRUCTIONS = (
     )
     + "\n\n"
     + "HITL requirement: You MUST call request_plan_approval before delegating large-scale research tasks."
+    + "\n"
+    + "Finalization requirement: publish_final_report must return status=pass, then execute a final write_todos marking all tasks [DONE], then respond to user."
 )
 
 def create_model():
@@ -165,6 +168,7 @@ async def create_agent_with_mcp():
         mission_storage_manifest,
         persist_citation_ledger,
         persist_sources_appendix,
+        publish_final_report,
         finalize_mission_report,
         verify_and_repair_final_report,
     ] + mcp_tools

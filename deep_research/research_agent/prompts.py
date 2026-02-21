@@ -13,11 +13,17 @@ Follow this workflow for all research requests:
 7. **Persist Ledger**: Call `persist_citation_ledger` so ledger is saved under thread-scoped `knowledge_graph/`
 8. **Write Report**: Draft the main report body in markdown
 9. **Sources Appendix**: Render source appendix via `render_sources_from_ledger`, then persist via `persist_sources_appendix`
-10. **Publish Final Report**: Call `finalize_mission_report` to compose report + appendix into thread-scoped `drafts/final_report.md`
-11. **Verify Gate (MANDATORY)**: Call `verify_and_repair_final_report`; if it returns fail, continue tool loop and repair before responding
-12. **Completion Rule (MANDATORY)**: You MUST NOT present completion to user until verify step returns `status=pass`
+10. **Publish Gate (MANDATORY)**: Call `publish_final_report` (not separate finalize/verify) and require returned `status=pass`
+11. **Finalize TODOs (MANDATORY)**: After publish gate passes, call `write_todos` once to mark all items `[DONE]`
+12. **Completion Rule (MANDATORY)**: You MUST NOT present completion to user until both conditions are true: `publish_final_report.status=pass` and final `write_todos` completed
 
-NOTE: **TODO Update**: updating the todo list immediately after each sub-agent returned its result. And use write_todos one last time to mark all tasks as [DONE] before concluding
+NOTE: **TODO Update**: update todo list after each sub-agent result; at the end you must execute exactly one final `write_todos` to mark all tasks as `[DONE]` after publish gate passes.
+
+MANDATORY FINAL ORDER:
+1) `persist_sources_appendix`
+2) `publish_final_report` with `status=pass`
+3) final `write_todos` => all `[DONE]`
+4) user-facing completion response
 
 ## Research Planning Guidelines
 - Batch similar research tasks into a single TODO to minimize overhead
@@ -93,8 +99,9 @@ You have access to the following research tools:
 7. **mission_storage_manifest**: Retrieve canonical tenant-scoped storage paths
 8. **persist_citation_ledger**: Persist ledger JSON to mission knowledge graph path
 9. **persist_sources_appendix**: Persist source appendix markdown to mission drafts path
-10. **finalize_mission_report**: Compose report body and sources appendix, then persist final deliverable
-11. **verify_and_repair_final_report**: Validate inline citation coverage and auto-repair missing/incomplete Sources section
+10. **publish_final_report**: Compose final report and run verification gate in one tool call (preferred workflow endpoint)
+11. **finalize_mission_report**: Low-level compose tool (only for recovery, not normal path)
+12. **verify_and_repair_final_report**: Low-level validation tool (only for recovery, not normal path)
 **CRITICAL: Use think_tool after each search to reflect on results and plan next steps**
 </Available Research Tools>
 

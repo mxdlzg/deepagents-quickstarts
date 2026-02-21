@@ -748,6 +748,54 @@ def verify_and_repair_final_report(runtime: ToolRuntime) -> str:
         return _safe_tool_error("verify_and_repair_final_report", error)
 
 
+@tool(parse_docstring=True)
+def publish_final_report(
+    report_body_markdown: str,
+    runtime: ToolRuntime,
+    appendix_markdown: str = "",
+) -> str:
+    """Finalize report and enforce verification gate in one atomic tool call.
+
+    This tool is the preferred workflow endpoint to avoid skipping validation.
+
+    Args:
+        report_body_markdown: Main report body markdown.
+        runtime: Injected tool runtime.
+        appendix_markdown: Optional sources appendix markdown.
+
+    Returns:
+        JSON payload with finalize result, verify result, and final status.
+    """
+    try:
+        finalize_result = finalize_mission_report.func(
+            report_body_markdown=report_body_markdown,
+            runtime=runtime,
+            appendix_markdown=appendix_markdown,
+        )
+        verify_result = verify_and_repair_final_report.func(runtime=runtime)
+
+        verify_status = "fail"
+        verify_payload: dict | str
+        try:
+            verify_payload = json.loads(verify_result)
+            verify_status = str(verify_payload.get("status", "fail")).lower()
+        except Exception:
+            verify_payload = verify_result
+
+        return json.dumps(
+            {
+                "status": "pass" if verify_status == "pass" else "fail",
+                "finalize": finalize_result,
+                "verify": verify_payload,
+                "next_action": "complete" if verify_status == "pass" else "repair_and_retry_publish",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    except Exception as error:
+        return _safe_tool_error("publish_final_report", error)
+
+
 def fetch_webpage_content(url: str, timeout: float = 10.0, max_chars: int = 6000) -> str:
     """Fetch and convert webpage content to markdown.
 
