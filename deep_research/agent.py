@@ -7,6 +7,7 @@ for conducting web research with strategic thinking and context management.
 import os
 from datetime import datetime
 import asyncio
+import json
 
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
@@ -102,6 +103,29 @@ def create_model():
 my_model = create_model()
 
 
+def _apply_safe_tool_error_handling(tools):
+    """Ensure tool exceptions degrade to structured text instead of aborting the run."""
+
+    def _to_error_payload(error: Exception, tool_name: str = "unknown_tool") -> str:
+        return json.dumps(
+            {
+                "status": "error",
+                "tool": tool_name,
+                "error_type": error.__class__.__name__,
+                "message": str(error),
+            },
+            ensure_ascii=False,
+        )
+
+    for tool in tools:
+        try:
+            tool_name = getattr(tool, "name", "unknown_tool")
+            tool.handle_tool_error = lambda error, _tool_name=tool_name: _to_error_payload(error, _tool_name)
+            tool.handle_validation_error = True
+        except Exception:
+            continue
+
+
 def create_research_subagent(tools):
     custom_graph = create_agent(
         model=my_model,
@@ -144,6 +168,8 @@ async def create_agent_with_mcp():
         finalize_mission_report,
         verify_and_repair_final_report,
     ] + mcp_tools
+    _apply_safe_tool_error_handling(all_tools)
+
     research_sub_agent = create_research_subagent(all_tools)
 
     # Create the agent
