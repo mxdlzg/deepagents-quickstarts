@@ -8,6 +8,7 @@ import os
 import httpx
 import json
 import hashlib
+import time
 from urllib.parse import urlparse, urlunparse
 from enum import Enum
 from langchain_core.tools import InjectedToolArg, tool
@@ -80,6 +81,46 @@ def get_tavily_client() -> TavilyClient:
     return tavily_client
 
 
+def _is_transient_tavily_error(error: Exception) -> bool:
+    error_name = error.__class__.__name__.lower()
+    message = str(error).lower()
+    return (
+        "timeout" in error_name
+        or "timed out" in message
+        or "tempor" in message
+        or "connection" in message
+        or "rate limit" in message
+    )
+
+
+def _search_tavily_with_retry(
+    query: str,
+    *,
+    max_results: int,
+    topic: Literal["general", "news", "finance"],
+    retries: int = 2,
+    base_backoff_seconds: float = 1.2,
+) -> dict:
+    last_error: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            return get_tavily_client().search(
+                query,
+                max_results=max_results,
+                topic=topic,
+            )
+        except Exception as error:
+            last_error = error
+            is_last_attempt = attempt >= retries
+            if is_last_attempt or not _is_transient_tavily_error(error):
+                break
+            time.sleep(base_backoff_seconds * (2**attempt))
+
+    if last_error is None:
+        raise RuntimeError("Tavily search failed for unknown reason")
+    raise last_error
+
+
 def _canonicalize_url(url: str) -> str:
     if not url:
         return ""
@@ -122,6 +163,18 @@ def _merge_state_file_updates(runtime: ToolRuntime, files_update: dict | None) -
     existing_files = dict(runtime.state.get("files", {}))
     existing_files.update(files_update)
     runtime.state["files"] = existing_files
+
+
+def _safe_tool_error(tool_name: str, error: Exception, **extra: object) -> str:
+    payload: dict[str, object] = {
+        "status": "error",
+        "tool": tool_name,
+        "error_type": error.__class__.__name__,
+        "message": str(error),
+    }
+    if extra:
+        payload.update(extra)
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def _upsert_text_file(runtime: ToolRuntime, file_path: str, content: str) -> str:
@@ -278,38 +331,42 @@ def route_research(
     Returns:
         Routing recommendation with route, rationale, and execution plan.
     """
-    route, reason = _decide_retrieval_route(
-        query=query,
-        need_freshness=need_freshness,
-        prefer_internal=prefer_internal,
-    )
+    try:
+        route, reason = _decide_retrieval_route(
+            query=query,
+            need_freshness=need_freshness,
+            prefer_internal=prefer_internal,
+        )
 
-    if route == RetrievalRoute.INTERNAL:
-        execution_plan = [
-            "Call ALB_MCP tool(s) first for internal and historical depth",
-            "Preserve citation/source fields from ALB response",
-        ]
-    elif route == RetrievalRoute.EXTERNAL:
-        execution_plan = [
-            "Call tavily_search for external and latest context",
-            "Use returned web citations in the draft",
-        ]
-    else:
-        execution_plan = [
-            "Call ALB_MCP tools for internal depth and private context",
-            "Call tavily_search for latest external updates",
-            "Merge evidence and keep citations from both channels",
-        ]
+        if route == RetrievalRoute.INTERNAL:
+            execution_plan = [
+                "Call ALB_MCP tool(s) first for internal and historical depth",
+                "Preserve citation/source fields from ALB response",
+            ]
+        elif route == RetrievalRoute.EXTERNAL:
+            execution_plan = [
+                "Call tavily_search for external and latest context",
+                "Use returned web citations in the draft",
+            ]
+        else:
+            execution_plan = [
+                "Call ALB_MCP tools for internal depth and private context",
+                "Call tavily_search for latest external updates",
+                "Merge evidence and keep citations from both channels",
+            ]
 
-    return json.dumps(
-        {
-            "route": route.value,
-            "reason": reason,
-            "execution_plan": execution_plan,
-        },
-        ensure_ascii=False,
-        indent=2,
-    )
+        return json.dumps(
+            {
+                "status": "ok",
+                "route": route.value,
+                "reason": reason,
+                "execution_plan": execution_plan,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    except Exception as error:
+        return _safe_tool_error("route_research", error)
 
 
 @tool(parse_docstring=True)
@@ -362,59 +419,62 @@ def build_citation_ledger(
     Returns:
         Updated ledger JSON with source IDs and section mappings.
     """
-    payload = json.loads(evidence_json or "{}")
-    evidence_items = payload.get("evidence", [])
+    try:
+        payload = json.loads(evidence_json or "{}")
+        evidence_items = payload.get("evidence", [])
 
-    if existing_ledger_json.strip():
-        ledger = json.loads(existing_ledger_json)
-    else:
-        ledger = {"sources": [], "by_fingerprint": {}, "section_map": {}}
-
-    web_index = _extract_existing_max_index(ledger, SourceChannel.WEB)
-    mcp_index = _extract_existing_max_index(ledger, SourceChannel.ALB_MCP)
-
-    for item in evidence_items:
-        channel = _normalize_source_channel(item.get("channel"))
-        title = str(item.get("title", "Untitled Source"))
-        url = str(item.get("url", ""))
-        section = str(item.get("section", "General"))
-        raw_citation = str(item.get("raw_citation", ""))
-        snippet = str(item.get("snippet", ""))
-
-        fingerprint = _stable_source_fingerprint(channel, title, url, raw_citation)
-        existing_id = ledger.get("by_fingerprint", {}).get(fingerprint)
-
-        if existing_id is None:
-            if channel == SourceChannel.WEB:
-                web_index += 1
-                citation_id = _new_citation_id(channel, web_index)
-            else:
-                mcp_index += 1
-                citation_id = _new_citation_id(channel, mcp_index)
-
-            source_item = {
-                "citation_id": citation_id,
-                "channel": channel.value,
-                "title": title,
-                "url": _canonicalize_url(url),
-                "raw_citation": raw_citation,
-                "snippets": [snippet] if snippet else [],
-            }
-            ledger["sources"].append(source_item)
-            ledger["by_fingerprint"][fingerprint] = citation_id
+        if existing_ledger_json.strip():
+            ledger = json.loads(existing_ledger_json)
         else:
-            citation_id = existing_id
-            for source in ledger.get("sources", []):
-                if source.get("citation_id") == citation_id and snippet:
-                    snippets = source.setdefault("snippets", [])
-                    if snippet not in snippets:
-                        snippets.append(snippet)
+            ledger = {"sources": [], "by_fingerprint": {}, "section_map": {}}
 
-        section_refs = ledger.setdefault("section_map", {}).setdefault(section, [])
-        if citation_id not in section_refs:
-            section_refs.append(citation_id)
+        web_index = _extract_existing_max_index(ledger, SourceChannel.WEB)
+        mcp_index = _extract_existing_max_index(ledger, SourceChannel.ALB_MCP)
 
-    return json.dumps(ledger, ensure_ascii=False, indent=2)
+        for item in evidence_items:
+            channel = _normalize_source_channel(item.get("channel"))
+            title = str(item.get("title", "Untitled Source"))
+            url = str(item.get("url", ""))
+            section = str(item.get("section", "General"))
+            raw_citation = str(item.get("raw_citation", ""))
+            snippet = str(item.get("snippet", ""))
+
+            fingerprint = _stable_source_fingerprint(channel, title, url, raw_citation)
+            existing_id = ledger.get("by_fingerprint", {}).get(fingerprint)
+
+            if existing_id is None:
+                if channel == SourceChannel.WEB:
+                    web_index += 1
+                    citation_id = _new_citation_id(channel, web_index)
+                else:
+                    mcp_index += 1
+                    citation_id = _new_citation_id(channel, mcp_index)
+
+                source_item = {
+                    "citation_id": citation_id,
+                    "channel": channel.value,
+                    "title": title,
+                    "url": _canonicalize_url(url),
+                    "raw_citation": raw_citation,
+                    "snippets": [snippet] if snippet else [],
+                }
+                ledger["sources"].append(source_item)
+                ledger["by_fingerprint"][fingerprint] = citation_id
+            else:
+                citation_id = existing_id
+                for source in ledger.get("sources", []):
+                    if source.get("citation_id") == citation_id and snippet:
+                        snippets = source.setdefault("snippets", [])
+                        if snippet not in snippets:
+                            snippets.append(snippet)
+
+            section_refs = ledger.setdefault("section_map", {}).setdefault(section, [])
+            if citation_id not in section_refs:
+                section_refs.append(citation_id)
+
+        return json.dumps(ledger, ensure_ascii=False, indent=2)
+    except Exception as error:
+        return _safe_tool_error("build_citation_ledger", error)
 
 
 @tool(parse_docstring=True)
@@ -431,29 +491,36 @@ def render_sources_from_ledger(
     Returns:
         Markdown-formatted source list.
     """
-    ledger = json.loads(ledger_json or "{}")
-    all_sources = ledger.get("sources", [])
+    try:
+        ledger = json.loads(ledger_json or "{}")
+        all_sources = ledger.get("sources", [])
 
-    if section:
-        target_ids = set(ledger.get("section_map", {}).get(section, []))
-        sources = [source for source in all_sources if source.get("citation_id") in target_ids]
-    else:
-        sources = all_sources
+        if section:
+            target_ids = set(ledger.get("section_map", {}).get(section, []))
+            sources = [source for source in all_sources if source.get("citation_id") in target_ids]
+        else:
+            sources = all_sources
 
-    lines = ["### Sources"]
-    for source in sources:
-        citation_id = source.get("citation_id", "UNK")
-        title = source.get("title", "Untitled Source")
-        url = source.get("url", "")
-        channel = source.get("channel", "unknown")
-        raw_citation = source.get("raw_citation", "")
-        suffix = f" | raw_citation={raw_citation}" if raw_citation else ""
-        lines.append(f"[{citation_id}] ({channel}) {title}: {url}{suffix}")
+        lines = ["### Sources"]
+        for source in sources:
+            citation_id = source.get("citation_id", "UNK")
+            title = source.get("title", "Untitled Source")
+            url = source.get("url", "")
+            channel = source.get("channel", "unknown")
+            raw_citation = source.get("raw_citation", "")
+            suffix = f" | raw_citation={raw_citation}" if raw_citation else ""
+            lines.append(f"[{citation_id}] ({channel}) {title}: {url}{suffix}")
 
-    if len(lines) == 1:
-        lines.append("(No sources)")
+        if len(lines) == 1:
+            lines.append("(No sources)")
 
-    return "\n".join(lines)
+        return "\n".join(lines)
+    except Exception as error:
+        return (
+            "### Sources\n"
+            + f"[WARN] render_sources_from_ledger degraded: {error.__class__.__name__}: {error}\n"
+            + "(No sources)"
+        )
 
 
 @tool(parse_docstring=True)
@@ -466,19 +533,23 @@ def mission_storage_manifest(runtime: ToolRuntime) -> str:
     Returns:
         JSON with canonical mission/user scoped storage paths.
     """
-    path_manager = _get_path_manager_from_runtime(runtime)
-    payload = {
-        "user_profile_preferences": str(path_manager.user_profile_preferences()),
-        "thread_root": str(path_manager.thread_root()),
-        "mission_root": str(path_manager.mission_root()),
-        "raw_materials_dir": str(path_manager.raw_materials_dir()),
-        "knowledge_graph_dir": str(path_manager.knowledge_graph_dir()),
-        "drafts_dir": str(path_manager.drafts_dir()),
-        "citation_ledger_path": path_manager.thread_path("knowledge_graph", "citation_ledger.json"),
-        "sources_appendix_path": path_manager.thread_path("drafts", "sources_appendix.md"),
-        "final_report_path": path_manager.thread_path("drafts", "final_report.md"),
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2)
+    try:
+        path_manager = _get_path_manager_from_runtime(runtime)
+        payload = {
+            "status": "ok",
+            "user_profile_preferences": str(path_manager.user_profile_preferences()),
+            "thread_root": str(path_manager.thread_root()),
+            "mission_root": str(path_manager.mission_root()),
+            "raw_materials_dir": str(path_manager.raw_materials_dir()),
+            "knowledge_graph_dir": str(path_manager.knowledge_graph_dir()),
+            "drafts_dir": str(path_manager.drafts_dir()),
+            "citation_ledger_path": path_manager.thread_path("knowledge_graph", "citation_ledger.json"),
+            "sources_appendix_path": path_manager.thread_path("drafts", "sources_appendix.md"),
+            "final_report_path": path_manager.thread_path("drafts", "final_report.md"),
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+    except Exception as error:
+        return _safe_tool_error("mission_storage_manifest", error)
 
 
 @tool(parse_docstring=True)
@@ -495,10 +566,13 @@ def persist_citation_ledger(
     Returns:
         Status message with storage path.
     """
-    path_manager = _get_path_manager_from_runtime(runtime)
-    ledger_path = path_manager.thread_path("knowledge_graph", "citation_ledger.json")
-    status = _upsert_text_file(runtime=runtime, file_path=ledger_path, content=ledger_json)
-    return f"Citation ledger {status}: {ledger_path}"
+    try:
+        path_manager = _get_path_manager_from_runtime(runtime)
+        ledger_path = path_manager.thread_path("knowledge_graph", "citation_ledger.json")
+        status = _upsert_text_file(runtime=runtime, file_path=ledger_path, content=ledger_json)
+        return f"Citation ledger {status}: {ledger_path}"
+    except Exception as error:
+        return _safe_tool_error("persist_citation_ledger", error)
 
 
 @tool(parse_docstring=True)
@@ -515,10 +589,13 @@ def persist_sources_appendix(
     Returns:
         Status message with storage path.
     """
-    path_manager = _get_path_manager_from_runtime(runtime)
-    sources_path = path_manager.thread_path("drafts", "sources_appendix.md")
-    status = _upsert_text_file(runtime=runtime, file_path=sources_path, content=sources_markdown)
-    return f"Sources appendix {status}: {sources_path}"
+    try:
+        path_manager = _get_path_manager_from_runtime(runtime)
+        sources_path = path_manager.thread_path("drafts", "sources_appendix.md")
+        status = _upsert_text_file(runtime=runtime, file_path=sources_path, content=sources_markdown)
+        return f"Sources appendix {status}: {sources_path}"
+    except Exception as error:
+        return _safe_tool_error("persist_sources_appendix", error)
 
 
 @tool(parse_docstring=True)
@@ -540,21 +617,135 @@ def finalize_mission_report(
     Returns:
         Status message with final report path.
     """
-    path_manager = _get_path_manager_from_runtime(runtime)
-    appendix_path = path_manager.thread_path("drafts", "sources_appendix.md")
-    final_report_path = path_manager.thread_path("drafts", "final_report.md")
+    try:
+        path_manager = _get_path_manager_from_runtime(runtime)
+        appendix_path = path_manager.thread_path("drafts", "sources_appendix.md")
+        final_report_path = path_manager.thread_path("drafts", "final_report.md")
 
-    appendix = appendix_markdown.strip()
-    if not appendix:
-        appendix = _read_text_file(runtime=runtime, file_path=appendix_path).strip()
+        appendix = appendix_markdown.strip()
+        if not appendix:
+            appendix = _read_text_file(runtime=runtime, file_path=appendix_path).strip()
 
-    if appendix:
-        composed = f"{report_body_markdown.rstrip()}\n\n---\n\n{appendix}\n"
-    else:
-        composed = report_body_markdown.rstrip() + "\n"
+        if appendix:
+            composed = f"{report_body_markdown.rstrip()}\n\n---\n\n{appendix}\n"
+        else:
+            composed = report_body_markdown.rstrip() + "\n"
 
-    status = _upsert_text_file(runtime=runtime, file_path=final_report_path, content=composed)
-    return f"Final report {status}: {final_report_path}"
+        status = _upsert_text_file(runtime=runtime, file_path=final_report_path, content=composed)
+        return f"Final report {status}: {final_report_path}"
+    except Exception as error:
+        return _safe_tool_error("finalize_mission_report", error)
+
+
+def _has_sources_section(markdown: str) -> bool:
+    lowered = markdown.lower()
+    return "### sources" in lowered or "## sources" in lowered
+
+
+def _extract_inline_citation_ids(markdown: str) -> set[str]:
+    import re
+
+    # Matches [WEB-1], [MCP-2], [1], [2], etc.
+    return set(re.findall(r"\[([A-Za-z]+-\d+|\d+)\]", markdown))
+
+
+def _extract_sources_section_ids(markdown: str) -> set[str]:
+    import re
+
+    lines = markdown.splitlines()
+    start_idx = -1
+    for idx, line in enumerate(lines):
+        if line.strip().lower() in {"### sources", "## sources"}:
+            start_idx = idx
+            break
+
+    if start_idx < 0:
+        return set()
+
+    section_text = "\n".join(lines[start_idx + 1 :])
+    return set(re.findall(r"\[([A-Za-z]+-\d+|\d+)\]", section_text))
+
+
+@tool(parse_docstring=True)
+def verify_and_repair_final_report(runtime: ToolRuntime) -> str:
+    """Verify final report citation completeness and auto-repair missing Sources section.
+
+    Repair policy:
+    - If report has no Sources section, auto-append one from persisted ledger.
+    - If report has Sources section but missing citation IDs referenced inline,
+      append full ledger-based Sources section to restore traceability.
+
+    Args:
+        runtime: Injected tool runtime.
+
+    Returns:
+        JSON status including pass/fail fields and any repairs applied.
+    """
+    try:
+        path_manager = _get_path_manager_from_runtime(runtime)
+        ledger_path = path_manager.thread_path("knowledge_graph", "citation_ledger.json")
+        final_report_path = path_manager.thread_path("drafts", "final_report.md")
+
+        report_text = _read_text_file(runtime=runtime, file_path=final_report_path)
+        if not report_text.strip():
+            return json.dumps(
+                {
+                    "status": "fail",
+                    "reason": "final report is empty or missing",
+                    "final_report_path": final_report_path,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        inline_ids = _extract_inline_citation_ids(report_text)
+        sources_ids = _extract_sources_section_ids(report_text)
+        has_sources = _has_sources_section(report_text)
+
+        repaired = False
+        repair_notes: list[str] = []
+
+        ledger_json = _read_text_file(runtime=runtime, file_path=ledger_path)
+        if ledger_json.strip():
+            full_sources_markdown = render_sources_from_ledger.func(ledger_json=ledger_json, section="")
+        else:
+            full_sources_markdown = "### Sources\n(No sources)"
+
+        if not has_sources:
+            report_text = report_text.rstrip() + "\n\n---\n\n" + full_sources_markdown + "\n"
+            repaired = True
+            repair_notes.append("appended missing Sources section from ledger")
+        else:
+            missing_ids = inline_ids - sources_ids
+            if missing_ids:
+                report_text = report_text.rstrip() + "\n\n---\n\n" + full_sources_markdown + "\n"
+                repaired = True
+                repair_notes.append(
+                    f"sources section missing citation ids: {sorted(missing_ids)}; appended full ledger sources"
+                )
+
+        if repaired:
+            _upsert_text_file(runtime=runtime, file_path=final_report_path, content=report_text)
+
+        final_inline_ids = _extract_inline_citation_ids(report_text)
+        final_sources_ids = _extract_sources_section_ids(report_text)
+        final_has_sources = _has_sources_section(report_text)
+        unmatched = sorted(final_inline_ids - final_sources_ids)
+
+        status = "pass" if final_has_sources and not unmatched else "fail"
+        return json.dumps(
+            {
+                "status": status,
+                "repaired": repaired,
+                "notes": repair_notes,
+                "final_report_path": final_report_path,
+                "unmatched_inline_citations": unmatched,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    except Exception as error:
+        return _safe_tool_error("verify_and_repair_final_report", error)
 
 
 def fetch_webpage_content(url: str, timeout: float = 10.0, max_chars: int = 6000) -> str:
@@ -604,20 +795,26 @@ def tavily_search(
     Returns:
         Formatted search results with full webpage content
     """
-    # Use Tavily to discover URLs
-    search_results = get_tavily_client().search(
-        query,
-        max_results=max_results,
-        topic=topic,
-    )
+    search_error: str | None = None
+    try:
+        search_results = _search_tavily_with_retry(
+            query,
+            max_results=max_results,
+            topic=topic,
+        )
+    except Exception as error:
+        search_results = {"results": []}
+        search_error = str(error)
 
     # Fetch full content for each URL
     result_texts = []
     source_lines = []
     accumulated_chars = 0
     for result in search_results.get("results", []):
-        url = result["url"]
-        title = result["title"]
+        url = str(result.get("url", "")).strip()
+        title = str(result.get("title", "Untitled Source")).strip() or "Untitled Source"
+        if not url:
+            continue
         citation_id = f"WEB-{len(source_lines) + 1}"
 
         # Fetch webpage content
@@ -641,6 +838,9 @@ def tavily_search(
 
     if len(search_results.get("results", [])) > len(source_lines):
         source_lines.append("[INFO] Additional results omitted due to context budget.")
+
+    if search_error:
+        source_lines.append(f"[WARN] Tavily search degraded: {search_error}")
 
     # Format final response
     response = f"""🔍 Found {len(result_texts)} result(s) for '{query}':

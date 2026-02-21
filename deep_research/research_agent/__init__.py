@@ -21,6 +21,7 @@ from research_agent.tools import (
     route_research,
     tavily_search,
     think_tool,
+    verify_and_repair_final_report,
 )
 
 __all__ = [
@@ -34,6 +35,7 @@ __all__ = [
     "persist_citation_ledger",
     "persist_sources_appendix",
     "finalize_mission_report",
+    "verify_and_repair_final_report",
     "create_tenant_backend",
     "RESEARCHER_INSTRUCTIONS",
     "RESEARCH_WORKFLOW_INSTRUCTIONS",

@@ -10,11 +10,12 @@ Follow this workflow for all research requests:
 4. **Save the request**: Use write_file() to save the clarified research brief to `/research_request.md`
 5. **Research**: Delegate research tasks to sub-agents using the task() tool - ALWAYS use sub-agents for research, never conduct research yourself
 6. **Synthesize**: Review all sub-agent findings and consolidate citations via `build_citation_ledger` (each unique source gets one number across all findings)
-7. **Persist Ledger**: Call `persist_citation_ledger` so ledger is saved under mission-scoped `knowledge_graph/`
+7. **Persist Ledger**: Call `persist_citation_ledger` so ledger is saved under thread-scoped `knowledge_graph/`
 8. **Write Report**: Draft the main report body in markdown
 9. **Sources Appendix**: Render source appendix via `render_sources_from_ledger`, then persist via `persist_sources_appendix`
-10. **Publish Final Report**: Call `finalize_mission_report` to compose report + appendix into mission-scoped `drafts/final_report.md`
-11. **Verify**: Read mission final report and confirm all claims are traceable
+10. **Publish Final Report**: Call `finalize_mission_report` to compose report + appendix into thread-scoped `drafts/final_report.md`
+11. **Verify Gate (MANDATORY)**: Call `verify_and_repair_final_report`; if it returns fail, continue tool loop and repair before responding
+12. **Completion Rule (MANDATORY)**: You MUST NOT present completion to user until verify step returns `status=pass`
 
 NOTE: **TODO Update**: updating the todo list immediately after each sub-agent returned its result. And use write_todos one last time to mark all tasks as [DONE] before concluding
 
@@ -63,7 +64,7 @@ Simply list items with details - no introduction needed:
 - Assign each unique URL a single citation number across ALL sub-agent findings
 - End report with ### Sources section listing each numbered source
 - Number sources sequentially without gaps (1,2,3,4...)
-- Format: [1] Source Title: URL (each on separate line for proper list rendering)
+- Format: [1] Source Title: URL (use bullet points and markdown links, each on separate line for proper list rendering)
 - Example:
 
   Some important finding [1]. Another key insight [2].
@@ -93,6 +94,7 @@ You have access to the following research tools:
 8. **persist_citation_ledger**: Persist ledger JSON to mission knowledge graph path
 9. **persist_sources_appendix**: Persist source appendix markdown to mission drafts path
 10. **finalize_mission_report**: Compose report body and sources appendix, then persist final deliverable
+11. **verify_and_repair_final_report**: Validate inline citation coverage and auto-repair missing/incomplete Sources section
 **CRITICAL: Use think_tool after each search to reflect on results and plan next steps**
 </Available Research Tools>
 

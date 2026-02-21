@@ -33,6 +33,7 @@ from research_agent.tools import (
     route_research,
     tavily_search,
     think_tool,
+    verify_and_repair_final_report,
 )
 
 # Load environment variables
@@ -141,6 +142,7 @@ async def create_agent_with_mcp():
         persist_citation_ledger,
         persist_sources_appendix,
         finalize_mission_report,
+        verify_and_repair_final_report,
     ] + mcp_tools
     research_sub_agent = create_research_subagent(all_tools)
 
