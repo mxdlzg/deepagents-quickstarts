@@ -28,6 +28,8 @@ tavily_client: TavilyClient | None = None
 
 ALB_MCP = "alb"
 ALLOWED_METADATA_KEYS = {"user_id", "thread_id", "mission_id", "tenant_role", "tenant_id"}
+PUBLIC_FINAL_REPORT_PATH = "/final_report.md"
+PUBLIC_SOURCES_APPENDIX_PATH = "/sources_appendix.md"
 
 
 class RetrievalRoute(str, Enum):
@@ -218,6 +220,22 @@ def _read_text_file(runtime: ToolRuntime, file_path: str) -> str:
         raise ValueError(f"Failed to access {file_path}: {download.error}")
 
     return (download.content or b"").decode("utf-8")
+
+
+def _upsert_dual_artifact(
+    runtime: ToolRuntime,
+    private_path: str,
+    public_path: str,
+    content: str,
+) -> dict:
+    private_status = _upsert_text_file(runtime=runtime, file_path=private_path, content=content)
+    public_status = _upsert_text_file(runtime=runtime, file_path=public_path, content=content)
+    return {
+        "private_path": private_path,
+        "private_status": private_status,
+        "public_path": public_path,
+        "public_status": public_status,
+    }
 
 
 def _truncate_text(text: str, max_chars: int) -> str:
@@ -537,6 +555,7 @@ def mission_storage_manifest(runtime: ToolRuntime) -> str:
         path_manager = _get_path_manager_from_runtime(runtime)
         payload = {
             "status": "ok",
+            "canonical_delivery_root": "/",
             "user_profile_preferences": str(path_manager.user_profile_preferences()),
             "thread_root": str(path_manager.thread_root()),
             "mission_root": str(path_manager.mission_root()),
@@ -544,8 +563,11 @@ def mission_storage_manifest(runtime: ToolRuntime) -> str:
             "knowledge_graph_dir": str(path_manager.knowledge_graph_dir()),
             "drafts_dir": str(path_manager.drafts_dir()),
             "citation_ledger_path": path_manager.thread_path("knowledge_graph", "citation_ledger.json"),
-            "sources_appendix_path": path_manager.thread_path("drafts", "sources_appendix.md"),
-            "final_report_path": path_manager.thread_path("drafts", "final_report.md"),
+            "sources_appendix_private_path": path_manager.thread_path("drafts", "sources_appendix.md"),
+            "sources_appendix_public_path": PUBLIC_SOURCES_APPENDIX_PATH,
+            "final_report_private_path": path_manager.thread_path("drafts", "final_report.md"),
+            "final_report_public_path": PUBLIC_FINAL_REPORT_PATH,
+            "final_report_path": PUBLIC_FINAL_REPORT_PATH,
         }
         return json.dumps(payload, ensure_ascii=False, indent=2)
     except Exception as error:
@@ -591,9 +613,23 @@ def persist_sources_appendix(
     """
     try:
         path_manager = _get_path_manager_from_runtime(runtime)
-        sources_path = path_manager.thread_path("drafts", "sources_appendix.md")
-        status = _upsert_text_file(runtime=runtime, file_path=sources_path, content=sources_markdown)
-        return f"Sources appendix {status}: {sources_path}"
+        private_sources_path = path_manager.thread_path("drafts", "sources_appendix.md")
+        dual_status = _upsert_dual_artifact(
+            runtime=runtime,
+            private_path=private_sources_path,
+            public_path=PUBLIC_SOURCES_APPENDIX_PATH,
+            content=sources_markdown,
+        )
+        return json.dumps(
+            {
+                "status": "ok",
+                "artifact": "sources_appendix",
+                **dual_status,
+                "delivery_path": PUBLIC_SOURCES_APPENDIX_PATH,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
     except Exception as error:
         return _safe_tool_error("persist_sources_appendix", error)
 
@@ -620,7 +656,7 @@ def finalize_mission_report(
     try:
         path_manager = _get_path_manager_from_runtime(runtime)
         appendix_path = path_manager.thread_path("drafts", "sources_appendix.md")
-        final_report_path = path_manager.thread_path("drafts", "final_report.md")
+        private_final_report_path = path_manager.thread_path("drafts", "final_report.md")
 
         appendix = appendix_markdown.strip()
         if not appendix:
@@ -631,8 +667,22 @@ def finalize_mission_report(
         else:
             composed = report_body_markdown.rstrip() + "\n"
 
-        status = _upsert_text_file(runtime=runtime, file_path=final_report_path, content=composed)
-        return f"Final report {status}: {final_report_path}"
+        dual_status = _upsert_dual_artifact(
+            runtime=runtime,
+            private_path=private_final_report_path,
+            public_path=PUBLIC_FINAL_REPORT_PATH,
+            content=composed,
+        )
+        return json.dumps(
+            {
+                "status": "ok",
+                "artifact": "final_report",
+                **dual_status,
+                "delivery_path": PUBLIC_FINAL_REPORT_PATH,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
     except Exception as error:
         return _safe_tool_error("finalize_mission_report", error)
 
@@ -684,9 +734,12 @@ def verify_and_repair_final_report(runtime: ToolRuntime) -> str:
     try:
         path_manager = _get_path_manager_from_runtime(runtime)
         ledger_path = path_manager.thread_path("knowledge_graph", "citation_ledger.json")
-        final_report_path = path_manager.thread_path("drafts", "final_report.md")
+        private_final_report_path = path_manager.thread_path("drafts", "final_report.md")
+        final_report_path = PUBLIC_FINAL_REPORT_PATH
 
         report_text = _read_text_file(runtime=runtime, file_path=final_report_path)
+        if not report_text.strip():
+            report_text = _read_text_file(runtime=runtime, file_path=private_final_report_path)
         if not report_text.strip():
             return json.dumps(
                 {
@@ -725,7 +778,12 @@ def verify_and_repair_final_report(runtime: ToolRuntime) -> str:
                 )
 
         if repaired:
-            _upsert_text_file(runtime=runtime, file_path=final_report_path, content=report_text)
+            _upsert_dual_artifact(
+                runtime=runtime,
+                private_path=private_final_report_path,
+                public_path=PUBLIC_FINAL_REPORT_PATH,
+                content=report_text,
+            )
 
         final_inline_ids = _extract_inline_citation_ids(report_text)
         final_sources_ids = _extract_sources_section_ids(report_text)
@@ -739,6 +797,7 @@ def verify_and_repair_final_report(runtime: ToolRuntime) -> str:
                 "repaired": repaired,
                 "notes": repair_notes,
                 "final_report_path": final_report_path,
+                "final_report_private_path": private_final_report_path,
                 "unmatched_inline_citations": unmatched,
             },
             ensure_ascii=False,
@@ -787,6 +846,7 @@ def publish_final_report(
                 "status": "pass" if verify_status == "pass" else "fail",
                 "finalize": finalize_result,
                 "verify": verify_payload,
+                "delivery_path": PUBLIC_FINAL_REPORT_PATH,
                 "next_action": "complete" if verify_status == "pass" else "repair_and_retry_publish",
             },
             ensure_ascii=False,

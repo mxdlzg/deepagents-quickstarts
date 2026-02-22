@@ -12,7 +12,7 @@ Follow this workflow for all research requests:
 6. **Synthesize**: Review all sub-agent findings and consolidate citations via `build_citation_ledger` (each unique source gets one number across all findings)
 7. **Persist Ledger**: Call `persist_citation_ledger` so ledger is saved under thread-scoped `knowledge_graph/`
 8. **Write Report**: Draft the main report body in markdown
-9. **Sources Appendix**: Render source appendix via `render_sources_from_ledger`, then persist via `persist_sources_appendix`
+9. **Sources Appendix**: Render source appendix via `render_sources_from_ledger`, then persist via `persist_sources_appendix` (canonical deliverable path: `/sources_appendix.md`)
 10. **Publish Gate (MANDATORY)**: Call `publish_final_report` (not separate finalize/verify) and require returned `status=pass`
 11. **Finalize TODOs (MANDATORY)**: After publish gate passes, call `write_todos` once to mark all items `[DONE]`
 12. **Completion Rule (MANDATORY)**: You MUST NOT present completion to user until both conditions are true: `publish_final_report.status=pass` and final `write_todos` completed
@@ -24,6 +24,9 @@ MANDATORY FINAL ORDER:
 2) `publish_final_report` with `status=pass`
 3) final `write_todos` => all `[DONE]`
 4) user-facing completion response
+
+DELIVERABLE PATH RULE:
+- Final user-facing report path must be `/final_report.md` (do not present `/memories/...` as the primary deliverable path).
 
 ## Research Planning Guidelines
 - Batch similar research tasks into a single TODO to minimize overhead
