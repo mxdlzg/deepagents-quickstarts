@@ -245,6 +245,24 @@ def _truncate_text(text: str, max_chars: int) -> str:
         return text
     return text[:max_chars] + "\n\n[Truncated for context budget]"
 
+
+def _display_citation_label(citation_id: str) -> str:
+    import re
+
+    value = str(citation_id or "").strip()
+    match = re.fullmatch(r"[A-Za-z]+-(\d+)", value)
+    if match:
+        return match.group(1)
+    return value or "UNK"
+
+
+def _strip_sources_section(markdown: str) -> str:
+    lines = markdown.splitlines()
+    for idx, line in enumerate(lines):
+        if line.strip().lower() in {"### sources", "## sources"}:
+            return "\n".join(lines[:idx]).rstrip()
+    return markdown.rstrip()
+
 @dataclass
 class CustomContext:
     user_id: str = ""
@@ -521,23 +539,33 @@ def render_sources_from_ledger(
 
         lines = ["### Sources"]
         for source in sources:
-            citation_id = source.get("citation_id", "UNK")
-            title = source.get("title", "Untitled Source")
-            url = source.get("url", "")
-            channel = source.get("channel", "unknown")
-            raw_citation = source.get("raw_citation", "")
-            suffix = f" | raw_citation={raw_citation}" if raw_citation else ""
-            lines.append(f"[{citation_id}] ({channel}) {title}: {url}{suffix}")
+            citation_id = str(source.get("citation_id", "UNK"))
+            display_id = _display_citation_label(citation_id)
+            title = str(source.get("title", "Untitled Source"))
+            url = str(source.get("url", "")).strip()
+            channel = str(source.get("channel", "unknown"))
+            raw_citation = str(source.get("raw_citation", "")).strip()
+
+            if url:
+                entry = f"- [{display_id}] [{citation_id}] [{title}]({url})"
+            else:
+                entry = f"- [{display_id}] [{citation_id}] {title}"
+
+            meta_parts = [f"channel={channel}"]
+            if raw_citation:
+                meta_parts.append(f"raw_citation={raw_citation}")
+
+            lines.append(f"{entry} ({'; '.join(meta_parts)})")
 
         if len(lines) == 1:
-            lines.append("(No sources)")
+            lines.append("- (No sources)")
 
         return "\n".join(lines)
     except Exception as error:
         return (
             "### Sources\n"
             + f"[WARN] render_sources_from_ledger degraded: {error.__class__.__name__}: {error}\n"
-            + "(No sources)"
+            + "- (No sources)"
         )
 
 
@@ -662,10 +690,12 @@ def finalize_mission_report(
         if not appendix:
             appendix = _read_text_file(runtime=runtime, file_path=appendix_path).strip()
 
+        body = report_body_markdown.rstrip()
         if appendix:
-            composed = f"{report_body_markdown.rstrip()}\n\n---\n\n{appendix}\n"
+            body = _strip_sources_section(body)
+            composed = f"{body}\n\n---\n\n{appendix}\n"
         else:
-            composed = report_body_markdown.rstrip() + "\n"
+            composed = body + "\n"
 
         dual_status = _upsert_dual_artifact(
             runtime=runtime,
@@ -762,7 +792,7 @@ def verify_and_repair_final_report(runtime: ToolRuntime) -> str:
         if ledger_json.strip():
             full_sources_markdown = render_sources_from_ledger.func(ledger_json=ledger_json, section="")
         else:
-            full_sources_markdown = "### Sources\n(No sources)"
+            full_sources_markdown = "### Sources\n- (No sources)"
 
         if not has_sources:
             report_text = report_text.rstrip() + "\n\n---\n\n" + full_sources_markdown + "\n"

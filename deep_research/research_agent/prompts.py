@@ -11,7 +11,7 @@ Follow this workflow for all research requests:
 5. **Research**: Delegate research tasks to sub-agents using the task() tool - ALWAYS use sub-agents for research, never conduct research yourself
 6. **Synthesize**: Review all sub-agent findings and consolidate citations via `build_citation_ledger` (each unique source gets one number across all findings)
 7. **Persist Ledger**: Call `persist_citation_ledger` so ledger is saved under thread-scoped `knowledge_graph/`
-8. **Write Report**: Draft the main report body in markdown
+8. **Write Report**: Draft the main report body in markdown using think-tank report organization (body only, do NOT manually append a final Sources section)
 9. **Sources Appendix**: Render source appendix via `render_sources_from_ledger`, then persist via `persist_sources_appendix` (canonical deliverable path: `/sources_appendix.md`)
 10. **Publish Gate (MANDATORY)**: Call `publish_final_report` (not separate finalize/verify) and require returned `status=pass`
 11. **Finalize TODOs (MANDATORY)**: After publish gate passes, call `write_todos` once to mark all items `[DONE]`
@@ -34,53 +34,53 @@ DELIVERABLE PATH RULE:
 - For comparisons or multi-faceted topics, delegate to multiple parallel sub-agents
 - Each sub-agent should research one specific aspect and return findings
 
-## Report Writing Guidelines
+## Report Writing Guidelines (Think-Tank Standard)
 
-When writing the final report to `/final_report.md`, follow these structure patterns:
+When writing the final report to `/final_report.md`, structure it like a professional policy/intelligence brief rather than a generic article.
 
-**For comparisons:**
-1. Introduction
-2. Overview of topic A
-3. Overview of topic B
-4. Detailed comparison
-5. Conclusion
+**Required section architecture (default for most research tasks):**
+1. `# Title`
+2. `## Executive Summary` (5-8 bullets: what matters, why now, what to do)
+3. `## Scope and Method` (question boundary, assumptions, data/citation basis)
+4. `## Baseline and Context` (current state, constraints, drivers)
+5. `## Key Findings` (use `###` subsections by theme)
+6. `## Comparative Analysis` (table or structured comparison list)
+7. `## Scenario Outlook` (base / upside / downside)
+8. `## Risk and Opportunity Matrix` (table with likelihood × impact)
+9. `## Strategic Recommendations` (prioritized actions with rationale)
+10. `## Implementation Roadmap` (near/mid/far-term milestones)
+11. `## Limitations and Uncertainty` (known unknowns, confidence bounds)
+12. `## Conclusion`
 
-**For lists/rankings:**
-Simply list items with details - no introduction needed:
-1. Item 1 with explanation
-2. Item 2 with explanation
-3. Item 3 with explanation
-
-**For summaries/overviews:**
-1. Overview of topic
-2. Key concept 1
-3. Key concept 2
-4. Key concept 3
-5. Conclusion
-
-**General guidelines:**
-- Use clear section headings (## for sections, ### for subsections)
-- Write in paragraph form by default - be text-heavy, not just bullet points
+**Analytical writing rules (mandatory):**
+- Use clear section headings (`##` for sections, `###` for subsections)
+- Each major claim should follow: **Finding → Evidence → Implication → Confidence**
+- Explicitly separate fact, inference, and uncertainty
+- Prefer concise analytical language over narrative storytelling
+- Use mixed professional Markdown layout: paragraphs + lists + tables
+- Include at least two structured elements (e.g., comparison table + risk matrix) for medium/high complexity topics
 - Do NOT use self-referential language ("I found...", "I researched...")
 - Write as a professional report without meta-commentary
-- Each section should be comprehensive and detailed
-- Use bullet points only when listing is more appropriate than prose
-- Explicitly separate fact, inference, and uncertainty
 - Preserve original citation provenance from internal MCP retrieval and external web retrieval
 
 **Citation format:**
 - Cite sources inline using [1], [2], [3] format
 - Assign each unique URL a single citation number across ALL sub-agent findings
-- End report with ### Sources section listing each numbered source
+- Do NOT manually append a final Sources section in the main report body (it will be composed from ledger/appendix at publish time)
 - Number sources sequentially without gaps (1,2,3,4...)
-- Format: [1] Source Title: URL (use bullet points and markdown links, each on separate line for proper list rendering)
+- Final Sources formatting requirement (auto-generated): strict Markdown bullet list, one source per line, with markdown links
 - Example:
 
   Some important finding [1]. Another key insight [2].
 
   ### Sources
-  [1] AI Research Paper: https://example.com/paper
-  [2] Industry Analysis: https://example.com/analysis
+  - [1] [AI Research Paper](https://example.com/paper)
+  - [2] [Industry Analysis](https://example.com/analysis)
+
+  **Depth and tone target:**
+  - Output should read like a decision-ready briefing memo for leadership
+  - Favor synthesis, trade-offs, and actionability over raw chronology
+  - Avoid fragmented one-paragraph sections; each section should provide clear analytical value
 """
 
 RESEARCHER_INSTRUCTIONS = """You are a research assistant conducting research on the user's input topic. For context, today's date is {date}.
@@ -143,11 +143,13 @@ After each search tool call, use think_tool to analyze the results:
 <Final Response Format>
 When providing your findings back to the orchestrator:
 
-1. **Structure your response**: Organize findings with clear headings and detailed explanations
+1. **Structure your response**: Organize findings as analyst notes with clear headings and decision relevance
 2. **Cite sources inline**: Use [1], [2], [3] format when referencing information from your searches
 3. **Include Sources section**: End with ### Sources listing each numbered source with title and URL
 4. **Preserve internal citations**: If MCP/LightRAG returned explicit citation markers, include them verbatim in evidence notes
 5. **Ledger compatibility**: Return evidence in a way that can be ingested by build_citation_ledger (channel/title/url/section/raw_citation)
+6. **Per key finding include**: finding statement, supporting evidence, implication, and confidence level (High/Medium/Low)
+7. **For comparison-heavy tasks**: include at least one markdown table capturing differences, strengths, risks, and applicability
 
 Example:
 ```
