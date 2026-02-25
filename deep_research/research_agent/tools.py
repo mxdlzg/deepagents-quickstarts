@@ -27,7 +27,10 @@ from research_agent.runtime_metadata import extract_metadata, require_tenant_ids
 tavily_client: TavilyClient | None = None
 
 ALB_MCP = "alb"
-ALLOWED_METADATA_KEYS = {"user_id", "thread_id", "mission_id", "tenant_role", "tenant_id"}
+ALLOWED_METADATA_KEYS = {
+    "research": ["user_id", "thread_id", "mission_id", "tenant_role", "tenant_id"],
+    "notebook": ["user_id", "documentId", "workspaceId"],
+}
 PUBLIC_FINAL_REPORT_PATH = "/final_report.md"
 PUBLIC_SOURCES_APPENDIX_PATH = "/sources_appendix.md"
 
@@ -284,7 +287,7 @@ async def inject_user_context(
 
     token = metadata.get("alb_mcp_token", "alb-sk-devtoken")
     new_args = dict(request.args or {})
-    for key in ALLOWED_METADATA_KEYS:
+    for key in ALLOWED_METADATA_KEYS.get(metadata.get("graph_id", ""), []):
         value = metadata.get(key)
         if value is not None:
             new_args[key] = value
