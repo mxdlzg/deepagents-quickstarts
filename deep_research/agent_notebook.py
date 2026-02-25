@@ -23,6 +23,10 @@ from research_agent.tools import (
 # Load environment variables
 load_dotenv()
 
+# Summarization settings (can be overridden via .env)
+MAIN_AGENT_COMPRESS_TOKEN_LIMIT = int(os.getenv("MAIN_AGENT_COMPRESS_TOKEN_LIMIT", "80000"))
+MAIN_AGENT_KEEP_HISTORYS = int(os.getenv("MAIN_AGENT_KEEP_HISTORYS", "10"))
+
 # Get current date (reserved for potential prompt use)
 current_date = datetime.now().strftime("%Y-%m-%d")
 
@@ -73,8 +77,8 @@ async def create_agent_with_mcp():
 			# DocMetadataMiddleware(),
 			CustomSummarizationMiddleware(
 				model=my_model,
-				trigger=("tokens", 80000),
-				keep=("messages", 10),
+				trigger=("tokens", MAIN_AGENT_COMPRESS_TOKEN_LIMIT),
+				keep=("messages", MAIN_AGENT_KEEP_HISTORYS),
 			)
 		],
 	).with_config({"recursion_limit": 300})

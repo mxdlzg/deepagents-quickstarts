@@ -41,6 +41,15 @@ from research_agent.tools import (
 # Load environment variables
 load_dotenv()
 
+# Summarization settings (can be overridden via .env)
+# MAIN_AGENT_COMPRESS_TOKEN_LIMIT / SUB_AGENT_COMPRESS_TOKEN_LIMIT control the trigger token threshold
+# MAIN_AGENT_KEEP_HISTORYS / SUB_AGENT_KEEP_HISTORYS control how many messages to keep
+MAIN_AGENT_COMPRESS_TOKEN_LIMIT = int(os.getenv("MAIN_AGENT_COMPRESS_TOKEN_LIMIT", "80000"))
+SUB_AGENT_COMPRESS_TOKEN_LIMIT = int(os.getenv("SUB_AGENT_COMPRESS_TOKEN_LIMIT", "90000"))
+
+MAIN_AGENT_KEEP_HISTORYS = int(os.getenv("MAIN_AGENT_KEEP_HISTORYS", "6"))
+SUB_AGENT_KEEP_HISTORYS = int(os.getenv("SUB_AGENT_KEEP_HISTORYS", "4"))
+
 # Limits
 max_concurrent_research_units = 3
 max_researcher_iterations = 3
@@ -137,8 +146,8 @@ def create_research_subagent(tools):
         middleware=[
             CustomSummarizationMiddleware(
                 model=my_model,
-                trigger=("tokens", 90000),
-                keep=("messages", 4),
+                trigger=("tokens", SUB_AGENT_COMPRESS_TOKEN_LIMIT),
+                keep=("messages", SUB_AGENT_KEEP_HISTORYS),
             )
         ],
     ).with_config({
@@ -188,8 +197,8 @@ async def create_agent_with_mcp():
         middleware=[
             CustomSummarizationMiddleware(
                 model=my_model,
-                trigger=("tokens", 80000),
-                keep=("messages", 6)
+                trigger=("tokens", MAIN_AGENT_COMPRESS_TOKEN_LIMIT),
+                keep=("messages", MAIN_AGENT_KEEP_HISTORYS)
             ),
             CustomMemoryMiddleware(
                 backend=create_tenant_backend,
