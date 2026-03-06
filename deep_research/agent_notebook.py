@@ -42,12 +42,18 @@ def create_model():
 	temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.0"))
 	top_p = float(os.getenv("OPENAI_TOP_P", "1.0"))
 	max_tokens = os.getenv("OPENAI_MAX_TOKENS", None)
+	enable_thinking = os.getenv("OPENAI_MODEL_ENABLE_THINKING", "false").lower() == "true"
 
 	model_kwargs = {
 		"api_key": api_key,
 		"model": model_name,
 		"temperature": temperature,
 		"top_p": top_p,
+		"extra_body": {
+			"chat_template_kwargs": {
+				"enable_thinking": enable_thinking
+			}
+		}
 	}
 
 	if base_url:
