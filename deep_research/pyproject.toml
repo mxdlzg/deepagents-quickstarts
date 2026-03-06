@@ -1,5 +1,5 @@
 [tool.setuptools.packages.find]
-include = ["notebook_agent*", "research_agent*"]
+include = ["notebook_agent*", "research_agent*", "law_agent*"]
 
 [project]
 name = "deep-research-example"
