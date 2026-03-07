@@ -9,7 +9,8 @@ import time
 
 import httpx
 from langchain_core.tools import tool
-from langgraph.config import get_stream_writer
+from utils import bind_tool_event_source as _bind_tool_event_source
+from utils import emit_tool_event as _emit_tool_event
 
 _ALLOWED_ROLES = {"system", "user", "assistant", "function", "tool"}
 _TASK_ID_CONTENT_PATTERN = re.compile(r"\[TASK_ID\]([A-Za-z0-9._:-]+)")
@@ -97,36 +98,6 @@ def _headers(api_key: str) -> dict[str, str]:
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
-
-
-def _get_stream_writer():
-    """Get LangGraph custom stream writer when available."""
-    try:
-        return get_stream_writer()
-    except Exception:
-        return None
-
-
-def _emit_custom(event: dict[str, object]) -> None:
-    """Emit custom stream events; no-op if runtime does not support it."""
-    writer = _get_stream_writer()
-    if writer is None:
-        return
-    try:
-        writer(event)
-    except Exception:
-        # Never break tool execution because of telemetry streaming issues.
-        return
-
-
-def _emit_tool_event(tool_name: str, event_type: str, **fields: object) -> None:
-    event: dict[str, object] = {
-        "event_type": event_type,
-        "lc_agent_name": "law_agent",
-        "tool_name": tool_name,
-    }
-    event.update(fields)
-    _emit_custom(event)
 
 
 def _extract_content_from_openai_json(response_body: dict) -> str:
@@ -274,8 +245,8 @@ def _consume_stream_for_content_and_task(response: httpx.Response) -> tuple[str,
             task_id = _extract_task_id(chunk)
             if task_id:
                 _emit_tool_event(
-                    "run_law_report_stream_and_wait",
                     "law_task_id_detected",
+                    content="Detected task id from stream.",
                     task_id=task_id,
                 )
 
@@ -289,17 +260,17 @@ def _consume_stream_for_content_and_task(response: httpx.Response) -> tuple[str,
                     if cleaned_piece:
                         content_parts.append(cleaned_piece)
                         _emit_tool_event(
-                            "run_law_report_stream_and_wait",
                             "law_stream_delta",
+                            content=cleaned_piece,
                             task_id=task_id,
                             index=chunk_index,
-                            delta=cleaned_piece,
                         )
 
     return "".join(content_parts), chunks, task_id
 
 
 @tool(parse_docstring=True)
+@_bind_tool_event_source
 def law_report_api(
     messages_json: str,
     model: str = "legal-report-agent",
@@ -392,6 +363,7 @@ def law_report_api(
 
 
 @tool(parse_docstring=True)
+@_bind_tool_event_source
 def start_law_report_task(
     messages_json: str,
     model: str = "legal-report-agent",
@@ -436,7 +408,11 @@ def start_law_report_task(
     task_id = ""
 
     try:
-        _emit_tool_event("start_law_report_task", "law_task_start_requested", mode="background")
+        _emit_tool_event(
+            "law_task_start_requested",
+            content="Requesting backend task creation in background mode.",
+            mode="background",
+        )
         with httpx.Client(timeout=timeout_seconds) as client:
             with client.stream(
                 "POST",
@@ -475,8 +451,8 @@ def start_law_report_task(
 
         if not task_id:
             _emit_tool_event(
-                "start_law_report_task",
                 "law_task_start_failed",
+                content="No task id was found in the initial stream handshake.",
                 reason="missing_task_id_in_stream_handshake",
             )
             return json.dumps(
@@ -490,7 +466,11 @@ def start_law_report_task(
                 indent=2,
             )
 
-        _emit_tool_event("start_law_report_task", "law_task_started", task_id=task_id)
+        _emit_tool_event(
+            "law_task_started",
+            content="Backend task created successfully.",
+            task_id=task_id,
+        )
         return json.dumps(
             {
                 "status": "accepted",
@@ -503,10 +483,9 @@ def start_law_report_task(
         )
     except Exception as error:
         _emit_tool_event(
-            "start_law_report_task",
             "law_task_start_error",
+            content=str(error),
             error_type=error.__class__.__name__,
-            message=str(error),
         )
         return json.dumps(
             {
@@ -522,6 +501,7 @@ def start_law_report_task(
 
 
 @tool(parse_docstring=True)
+@_bind_tool_event_source
 def run_law_report_stream_and_wait(
     messages_json: str,
     model: str = "legal-report-agent",
@@ -555,7 +535,11 @@ def run_law_report_stream_and_wait(
         JSON string with streamed content, optional task id, and final task status.
     """
     try:
-        _emit_tool_event("run_law_report_stream_and_wait", "law_foreground_stream_started", mode="foreground")
+        _emit_tool_event(
+            "law_foreground_stream_started",
+            content="Starting foreground streaming report generation.",
+            mode="foreground",
+        )
         payload = _build_payload(
             messages_json=messages_json,
             model=model,
@@ -580,8 +564,8 @@ def run_law_report_stream_and_wait(
                 stream_content, stream_chunks, task_id = _consume_stream_for_content_and_task(response)
 
         _emit_tool_event(
-            "run_law_report_stream_and_wait",
             "law_foreground_stream_completed",
+            content="Foreground stream consumption completed.",
             task_id=task_id,
             stream_chars=len(stream_content),
         )
@@ -598,8 +582,8 @@ def run_law_report_stream_and_wait(
                 task_status = _extract_task_status(fetched_task)
                 task_content = _extract_content_from_openai_json(fetched_task)
                 _emit_tool_event(
-                    "run_law_report_stream_and_wait",
                     "law_task_status_checked",
+                    content=f"Fetched task status: {task_status}.",
                     task_id=task_id,
                     task_status=task_status,
                     is_terminal=_is_terminal_task_status(task_status),
@@ -607,10 +591,9 @@ def run_law_report_stream_and_wait(
             except Exception as task_error:
                 task_query_error = f"{task_error.__class__.__name__}: {task_error}"
                 _emit_tool_event(
-                    "run_law_report_stream_and_wait",
                     "law_task_status_error",
+                    content=task_query_error,
                     task_id=task_id,
-                    error=task_query_error,
                 )
 
         final_content = task_content or stream_content
@@ -632,8 +615,8 @@ def run_law_report_stream_and_wait(
             result["raw_task"] = task_payload
 
         _emit_tool_event(
-            "run_law_report_stream_and_wait",
             "law_foreground_result_ready",
+            content="Foreground result is ready.",
             task_id=task_id,
             task_status=task_status,
             content_chars=len(final_content),
@@ -641,10 +624,9 @@ def run_law_report_stream_and_wait(
         return json.dumps(result, ensure_ascii=False, indent=2)
     except Exception as error:
         _emit_tool_event(
-            "run_law_report_stream_and_wait",
             "law_foreground_stream_error",
+            content=str(error),
             error_type=error.__class__.__name__,
-            message=str(error),
         )
         return json.dumps(
             {
@@ -660,6 +642,7 @@ def run_law_report_stream_and_wait(
 
 
 @tool(parse_docstring=True)
+@_bind_tool_event_source
 def get_law_report_task(task_id: str, include_raw: bool = False) -> str:
     """Get status or result for a previously started task.
 
@@ -700,6 +683,7 @@ def get_law_report_task(task_id: str, include_raw: bool = False) -> str:
 
 
 @tool(parse_docstring=True)
+@_bind_tool_event_source
 def list_law_report_tasks(limit: int = 20) -> str:
     """List recent law report tasks.
 
@@ -753,6 +737,7 @@ def list_law_report_tasks(limit: int = 20) -> str:
 
 
 @tool(parse_docstring=True)
+@_bind_tool_event_source
 def cancel_law_report_task(task_id: str, include_raw: bool = False) -> str:
     """Cancel a previously created backend task.
 
@@ -776,8 +761,8 @@ def cancel_law_report_task(task_id: str, include_raw: bool = False) -> str:
             previous_payload = {}
 
         _emit_tool_event(
-            "cancel_law_report_task",
             "law_task_cancel_requested",
+            content="Sending cancel request for backend task.",
             task_id=task_id,
             previous_task_status=previous_status,
         )
@@ -792,8 +777,8 @@ def cancel_law_report_task(task_id: str, include_raw: bool = False) -> str:
             latest_status = previous_status
 
         _emit_tool_event(
-            "cancel_law_report_task",
             "law_task_cancel_completed",
+            content=f"Cancel request completed with latest status: {latest_status}.",
             task_id=task_id,
             previous_task_status=previous_status,
             task_status=latest_status,
@@ -817,11 +802,10 @@ def cancel_law_report_task(task_id: str, include_raw: bool = False) -> str:
         return json.dumps(result, ensure_ascii=False, indent=2)
     except Exception as error:
         _emit_tool_event(
-            "cancel_law_report_task",
             "law_task_cancel_error",
+            content=str(error),
             task_id=task_id,
             error_type=error.__class__.__name__,
-            message=str(error),
         )
         return json.dumps(
             {
@@ -838,6 +822,7 @@ def cancel_law_report_task(task_id: str, include_raw: bool = False) -> str:
 
 
 @tool(parse_docstring=True)
+@_bind_tool_event_source
 def wait_law_report_task(task_id: str, timeout_seconds: int = 300, poll_interval_seconds: int = 10) -> str:
     """Poll backend task status until completion or timeout.
 

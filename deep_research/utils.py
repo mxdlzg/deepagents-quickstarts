@@ -1,12 +1,85 @@
 """Utility functions for displaying messages and prompts in Jupyter notebooks."""
 
+from contextvars import ContextVar
+from functools import wraps
+import inspect
 import json
 
+from langgraph.config import get_stream_writer
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
 console = Console()
+_CURRENT_TOOL_EVENT_SOURCE: ContextVar[str] = ContextVar("deep_research_tool_event_source", default="unknown")
+
+
+def _get_stream_writer():
+    """Get LangGraph custom stream writer when available."""
+    try:
+        return get_stream_writer()
+    except Exception:
+        return None
+
+
+def _emit_custom(event: dict[str, object]) -> None:
+    """Emit custom stream events; no-op if runtime does not support it."""
+    writer = _get_stream_writer()
+    if writer is None:
+        return
+    try:
+        writer(event)
+    except Exception:
+        return
+
+
+def _infer_tool_event_source() -> str:
+    tool_name = _CURRENT_TOOL_EVENT_SOURCE.get()
+    if tool_name != "unknown":
+        return tool_name
+
+    for frame_info in inspect.stack()[2:]:
+        candidate = frame_info.function
+        if candidate.startswith("_"):
+            continue
+        return candidate
+    return "unknown"
+
+
+def bind_tool_event_source(func):
+    """Bind emitted events to the current tool function without passing tool names manually."""
+    if inspect.iscoroutinefunction(func):
+        @wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            token = _CURRENT_TOOL_EVENT_SOURCE.set(func.__name__)
+            try:
+                return await func(*args, **kwargs)
+            finally:
+                _CURRENT_TOOL_EVENT_SOURCE.reset(token)
+
+        return async_wrapper
+
+    @wraps(func)
+    def sync_wrapper(*args, **kwargs):
+        token = _CURRENT_TOOL_EVENT_SOURCE.set(func.__name__)
+        try:
+            return func(*args, **kwargs)
+        finally:
+            _CURRENT_TOOL_EVENT_SOURCE.reset(token)
+
+    return sync_wrapper
+
+
+def emit_tool_event(event_type: str, content: str = "", **data: object) -> None:
+    """Emit a normalized tool event with stable top-level fields and text in content."""
+    event: dict[str, object] = {
+        "type": "tool_event",
+        "event_type": event_type,
+        "tool": _infer_tool_event_source(),
+        "content": content,
+        "data": data,
+    }
+    _emit_custom(event)
 
 
 def format_message_content(message):
