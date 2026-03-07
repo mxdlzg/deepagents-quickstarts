@@ -5,7 +5,6 @@ from datetime import datetime
 import asyncio
 
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
 
@@ -19,6 +18,7 @@ from research_agent.tools import (
 	alb_mcp_client,
 	think_tool,
 )
+from utils import create_openai_chat_model
 
 # Load environment variables
 load_dotenv()
@@ -30,42 +30,7 @@ MAIN_AGENT_KEEP_HISTORYS = int(os.getenv("MAIN_AGENT_KEEP_HISTORYS", "10"))
 # Get current date (reserved for potential prompt use)
 current_date = datetime.now().strftime("%Y-%m-%d")
 
-
-def create_model():
-	"""Create OpenAI-compatible chat model from environment variables."""
-	api_key = os.getenv("OPENAI_API_KEY")
-	if not api_key:
-		raise ValueError("OPENAI_API_KEY environment variable is not set")
-
-	model_name = os.getenv("OPENAI_MODEL", "gpt-4o")
-	base_url = os.getenv("OPENAI_BASE_URL", None)
-	temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.0"))
-	top_p = float(os.getenv("OPENAI_TOP_P", "1.0"))
-	max_tokens = os.getenv("OPENAI_MAX_TOKENS", None)
-	enable_thinking = os.getenv("OPENAI_MODEL_ENABLE_THINKING", "false").lower() == "true"
-
-	model_kwargs = {
-		"api_key": api_key,
-		"model": model_name,
-		"temperature": temperature,
-		"top_p": top_p,
-		"extra_body": {
-			"chat_template_kwargs": {
-				"enable_thinking": enable_thinking
-			}
-		}
-	}
-
-	if base_url:
-		model_kwargs["base_url"] = base_url
-
-	if max_tokens:
-		model_kwargs["max_tokens"] = int(max_tokens)
-
-	return ChatOpenAI(**model_kwargs)
-
-
-my_model = create_model()
+my_model = create_openai_chat_model()
 
 
 async def create_agent_with_mcp():

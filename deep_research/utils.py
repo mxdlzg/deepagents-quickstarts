@@ -4,7 +4,9 @@ from contextvars import ContextVar
 from functools import wraps
 import inspect
 import json
+import os
 
+from langchain_openai import ChatOpenAI
 from langgraph.config import get_stream_writer
 from rich.console import Console
 from rich.panel import Panel
@@ -80,6 +82,40 @@ def emit_tool_event(event_type: str, content: str = "", **data: object) -> None:
         "data": data,
     }
     _emit_custom(event)
+
+
+def create_openai_chat_model() -> ChatOpenAI:
+    """Create a shared OpenAI-compatible chat model from environment variables."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY environment variable is not set")
+
+    model_name = os.getenv("OPENAI_MODEL", "gpt-4o")
+    base_url = os.getenv("OPENAI_BASE_URL")
+    temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.0"))
+    top_p = float(os.getenv("OPENAI_TOP_P", "1.0"))
+    max_tokens = os.getenv("OPENAI_MAX_TOKENS")
+    enable_thinking = os.getenv("OPENAI_MODEL_ENABLE_THINKING", "false").lower() == "true"
+
+    model_kwargs: dict[str, object] = {
+        "api_key": api_key,
+        "model": model_name,
+        "temperature": temperature,
+        "top_p": top_p,
+        "extra_body": {
+            "chat_template_kwargs": {
+                "enable_thinking": enable_thinking,
+            }
+        },
+    }
+
+    if base_url:
+        model_kwargs["base_url"] = base_url
+
+    if max_tokens:
+        model_kwargs["max_tokens"] = int(max_tokens)
+
+    return ChatOpenAI(**model_kwargs)
 
 
 def format_message_content(message):

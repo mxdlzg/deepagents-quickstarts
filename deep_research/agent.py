@@ -9,7 +9,6 @@ from datetime import datetime
 import asyncio
 import json
 
-from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 from deepagents import create_deep_agent, CompiledSubAgent
 from langchain.agents import create_agent
@@ -37,6 +36,7 @@ from research_agent.tools import (
     think_tool,
     verify_and_repair_final_report,
 )
+from utils import create_openai_chat_model
 
 # Load environment variables
 load_dotenv()
@@ -73,52 +73,7 @@ INSTRUCTIONS = (
     + "Finalization requirement: publish_final_report must return status=pass, then execute a final write_todos marking all tasks [DONE], then respond to user."
 )
 
-def create_model():
-    """Create OpenAI-compatible chat model from environment variables.
-
-    Environment variables:
-        OPENAI_API_KEY: API key for OpenAI or compatible service (required)
-        OPENAI_MODEL: Model name (default: gpt-4o)
-        OPENAI_BASE_URL: Base URL for API endpoint (optional, uses OpenAI by default)
-        OPENAI_TEMPERATURE: Temperature for sampling (default: 0.0)
-        OPENAI_TOP_P: Nucleus sampling parameter (default: 1.0)
-        OPENAI_MAX_TOKENS: Maximum tokens in response (optional)
-
-    Returns:
-        ChatOpenAI: Configured OpenAI chat model
-    """
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable is not set")
-
-    model_name = os.getenv("OPENAI_MODEL", "gpt-4o")
-    base_url = os.getenv("OPENAI_BASE_URL", None)
-    temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.0"))
-    top_p = float(os.getenv("OPENAI_TOP_P", "1.0"))
-    max_tokens = os.getenv("OPENAI_MAX_TOKENS", None)
-    enable_thinking = os.getenv("OPENAI_MODEL_ENABLE_THINKING", "false").lower() == "true"
-
-    model_kwargs = {
-        "api_key": api_key,
-        "model": model_name,
-        "temperature": temperature,
-        "top_p": top_p,
-        "extra_body": {
-            "chat_template_kwargs": {
-                "enable_thinking": enable_thinking
-            }
-        },
-    }
-
-    if base_url:
-        model_kwargs["base_url"] = base_url
-
-    if max_tokens:
-        model_kwargs["max_tokens"] = int(max_tokens)
-
-    return ChatOpenAI(**model_kwargs)
-
-my_model = create_model()
+my_model = create_openai_chat_model()
 
 
 def _apply_safe_tool_error_handling(tools):
